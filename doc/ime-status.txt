@@ -1,0 +1,94 @@
+*ime-status.txt*        Show the current input method in the statusline
+
+==============================================================================
+CONTENTS                                                  *ime-status-contents*
+
+  1. Introduction ........................... |ime-status-introduction|
+  2. Requirements ........................... |ime-status-requirements|
+  3. Setup .................................. |ime-status-setup|
+  4. Configuration .......................... |ime-status-config|
+  5. API .................................... |ime-status-api|
+  6. Health ................................. |ime-status-health|
+
+==============================================================================
+1. INTRODUCTION                                       *ime-status-introduction*
+
+ime-status.nvim shows the current keyboard input method (한 / EN / あ / 中) in
+the statusline. Neovim cannot see the OS-level IME state, so the plugin queries
+an external tool, caches the result, and refreshes it asynchronously on a timer
+and on mode changes. It is statusline-agnostic: it merely exposes a fast getter.
+
+==============================================================================
+2. REQUIREMENTS                                       *ime-status-requirements*
+
+An external command that prints the current input source:
+
+  macOS    macism (https://github.com/laishulu/macism) or im-select
+  Windows  im-select.exe (https://github.com/daipeihust/im-select)
+  Linux    ibus or fcitx5-remote (experimental)
+
+The plugin does not install these. Run |:checkhealth| ime-status for guidance.
+
+==============================================================================
+3. SETUP                                                     *ime-status-setup*
+
+Call setup() once (this starts the polling timer): >lua
+
+    require("ime-status").setup({})
+<
+With lazy.nvim, `opts = {}` does this for you.
+
+==============================================================================
+4. CONFIGURATION                                            *ime-status-config*
+
+interval     (number, default 300)
+             Polling interval in milliseconds.
+
+insert_only  (boolean, default false)
+             Only poll while in insert mode.
+
+cmd          (string[]|nil, default nil)
+             Override the detection command, e.g. { "im-select" }. When nil the
+             command is auto-detected for the current OS.
+
+labels       (list, default 한/あ/中 rules)
+             Ordered { match = <pattern>, text = <label> } rules. `match` is a
+             case-insensitive substring tested against the raw backend id; the
+             first match wins.
+
+default      (string, default "EN")
+             Label shown when no rule matches.
+
+unknown      (string, default "?")
+             Label shown when the backend returns no usable output.
+
+format       (fun(label):string, default identity)
+             Final transform applied before display.
+
+==============================================================================
+5. API                                                         *ime-status-api*
+
+require("ime-status").setup({opts})                          *ime-status.setup*
+        Merge options, start polling, register autocmds. Idempotent.
+
+require("ime-status").get()                                    *ime-status.get*
+        Return the current label string. Reads the cache; never blocks.
+
+require("ime-status").component()                        *ime-status.component*
+        Like get() but passed through `format`. Wire this into a statusline.
+
+require("ime-status").refresh()                            *ime-status.refresh*
+        Trigger one asynchronous detection now.
+
+                                                      *ime-status-IMEStatusChanged*
+A `User IMEStatusChanged` autocmd fires whenever the cached label changes.
+
+==============================================================================
+6. HEALTH                                                   *ime-status-health*
+
+  :checkhealth ime-status
+
+Reports whether a supported input-source tool is on the PATH and, if not, the
+command to install one for your OS.
+
+vim:tw=78:ts=8:ft=help:norl:
