@@ -1,6 +1,8 @@
 # ime-status.nvim
 
-[English](README.md) | **한국어**
+<img width="500" height="312" alt="nvim demonstration" src="https://github.com/user-attachments/assets/e8986d4a-7f85-4cae-8c6c-aa17696a9a8e" />
+
+### [English](README.md) | **한국어**
 
 현재 키보드 입력기(한 / EN / あ / 中 …)를 Neovim 상태줄(statusline)에 표시합니다.
 
