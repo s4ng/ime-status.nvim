@@ -12,6 +12,10 @@ local M = {}
 ---@field default string         Shown when no label rule matches (typically the latin/english state)
 ---@field unknown string         Shown when the backend produced no usable output
 ---@field format fun(label:string):string  Final transform applied before display
+---@field auto_switch boolean       Force the IME to `latin_source` on leaving insert / focusing in normal mode
+---@field latin_source string|nil   Input-source id to switch to; nil = OS default (macOS: com.apple.keylayout.ABC)
+---@field restore_on_insert boolean On entering insert, restore the IME that was active before the last auto-switch
+---@field pause_on_focus_lost boolean  Stop polling while Neovim/the terminal is not focused
 
 ---@type IMEStatusConfig
 M.defaults = {
@@ -32,6 +36,10 @@ M.defaults = {
   format = function(label)
     return label
   end,
+  auto_switch = false,
+  latin_source = nil,
+  restore_on_insert = false,
+  pause_on_focus_lost = false,
 }
 
 ---@type IMEStatusConfig

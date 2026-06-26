@@ -92,8 +92,36 @@ require("ime-status").setup({
   default = "EN",        -- shown when no rule matches
   unknown = "?",         -- shown when the backend returns nothing
   format = function(label) return label end,
+
+  -- auto-switch (see below) — all default off
+  auto_switch = false,         -- on InsertLeave / focusing in normal mode, force latin_source
+  latin_source = nil,          -- id to switch to; nil = OS default (macOS: com.apple.keylayout.ABC)
+  restore_on_insert = false,   -- on InsertEnter, restore the IME used before the auto-switch
+  pause_on_focus_lost = false, -- stop polling while Neovim / the terminal is unfocused
 })
 ```
+
+### Auto-switch — stop normal-mode `j`/`k` from typing 한글
+
+If you keep an always-on Neovim buffer and jump in to press `j`/`k`, a leftover
+Korean IME turns those into `ㅓ`/`ㅏ` and motions break. `auto_switch = true`
+fixes the cause rather than just displaying it: it forces the IME to
+`latin_source` whenever you leave insert mode or focus the window in normal
+mode, so normal-mode keys always work.
+
+```lua
+require("ime-status").setup({
+  auto_switch = true,        -- normal mode is always latin
+  restore_on_insert = true,  -- but typing resumes in the IME you last used
+})
+```
+
+- `latin_source` defaults to the OS latin layout (macOS `com.apple.keylayout.ABC`,
+  Linux ibus `xkb:us::eng`). On Windows set it explicitly to your im-select id.
+- `restore_on_insert` remembers the IME active during insert and restores it on
+  the next `InsertEnter` — handy for buffers you write CJK in.
+- `pause_on_focus_lost = true` stops the polling timer while Neovim is
+  unfocused (it resumes, and refreshes, on `FocusGained`) to save battery.
 
 Add an icon, for example:
 

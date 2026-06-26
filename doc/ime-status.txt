@@ -65,6 +65,24 @@ unknown      (string, default "?")
 format       (fun(label):string, default identity)
              Final transform applied before display.
 
+auto_switch  (boolean, default false)
+             Force the IME to `latin_source` on InsertLeave and on focusing the
+             window in normal mode, so normal-mode motions are never swallowed
+             by a CJK input method.
+
+latin_source (string|nil, default nil)
+             Input-source id auto_switch switches to. nil = OS default
+             (macOS com.apple.keylayout.ABC, Linux ibus xkb:us::eng). Set
+             explicitly on Windows.
+
+restore_on_insert  (boolean, default false)
+             On InsertEnter, restore the IME that was active before the last
+             auto-switch.
+
+pause_on_focus_lost  (boolean, default false)
+             Stop polling while Neovim / the terminal is unfocused; resume and
+             refresh on FocusGained.
+
 ==============================================================================
 5. API                                                         *ime-status-api*
 

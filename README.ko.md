@@ -92,8 +92,35 @@ require("ime-status").setup({
   default = "EN",        -- 어떤 규칙에도 안 맞을 때 표시
   unknown = "?",         -- 백엔드가 아무것도 반환하지 않을 때 표시
   format = function(label) return label end,
+
+  -- 자동 전환 (아래 설명) — 전부 기본 off
+  auto_switch = false,         -- InsertLeave / 노멀 모드 포커스 시 latin_source로 강제 전환
+  latin_source = nil,          -- 전환할 id; nil = OS 기본값 (macOS: com.apple.keylayout.ABC)
+  restore_on_insert = false,   -- InsertEnter 시, 자동 전환 직전 쓰던 IME로 복원
+  pause_on_focus_lost = false, -- Neovim / 터미널이 비포커스일 때 폴링 중단
 })
 ```
+
+### 자동 전환 — 노멀 모드에서 `j`/`k`가 한글로 입력되는 문제 해결
+
+항상 켜둔 Neovim 버퍼에 진입해 바로 `j`/`k`를 누를 때, IME가 한글로 남아 있으면
+`ㅓ`/`ㅏ`가 입력되어 라인 이동이 안 됩니다. `auto_switch = true`는 이걸 *표시*만
+하는 게 아니라 **원인을 제거**합니다 — 인서트 모드를 벗어나거나 노멀 모드에서 창에
+포커스가 들어올 때 IME를 `latin_source`로 강제해, 노멀 모드 키가 항상 동작합니다.
+
+```lua
+require("ime-status").setup({
+  auto_switch = true,        -- 노멀 모드는 항상 영문
+  restore_on_insert = true,  -- 단, 타이핑은 직전에 쓰던 IME로 재개
+})
+```
+
+- `latin_source`의 기본값은 OS 영문 레이아웃입니다 (macOS `com.apple.keylayout.ABC`,
+  Linux ibus `xkb:us::eng`). Windows에서는 im-select id를 직접 지정하세요.
+- `restore_on_insert`는 인서트 중 쓰던 IME를 기억했다가 다음 `InsertEnter`에서
+  복원합니다 — 한글을 자주 입력하는 버퍼에 유용합니다.
+- `pause_on_focus_lost = true`는 Neovim이 비포커스일 때 폴링 타이머를 멈춥니다
+  (`FocusGained` 시 재개 및 갱신) — 배터리 절약용입니다.
 
 아이콘을 붙이는 예시:
 

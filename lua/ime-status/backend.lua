@@ -30,6 +30,44 @@ function M.default_cmd()
   return nil
 end
 
+-- Resolve the command that *sets* the input source to `id`, or nil when the
+-- current OS tool does not support switching. macism / im-select / im-select.exe
+-- all take the target id as their first argument; ibus uses `engine <name>`.
+---@param id string
+---@return string[]|nil
+function M.set_cmd(id)
+  if vim.fn.has("mac") == 1 then
+    if vim.fn.executable("macism") == 1 then
+      return { "macism", id }
+    end
+    if vim.fn.executable("im-select") == 1 then
+      return { "im-select", id }
+    end
+  elseif vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1 then
+    if vim.fn.executable("im-select.exe") == 1 then
+      return { "im-select.exe", id }
+    end
+  else
+    if vim.fn.executable("ibus") == 1 then
+      return { "ibus", "engine", id }
+    end
+  end
+  return nil
+end
+
+-- A sensible default "latin / english" input-source id per OS, used by
+-- auto_switch when the user did not set `latin_source`. Returns nil on Windows
+-- because im-select expects a locale id (e.g. "1033") that varies per machine.
+---@return string|nil
+function M.default_latin()
+  if vim.fn.has("mac") == 1 then
+    return "com.apple.keylayout.ABC"
+  elseif vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1 then
+    return nil
+  end
+  return "xkb:us::eng"
+end
+
 -- Run `cmd` asynchronously and hand its trimmed stdout to `cb` (nil on failure).
 -- Prefers vim.system (nvim >= 0.10) and falls back to jobstart otherwise so the
 -- plugin still works on 0.9.
