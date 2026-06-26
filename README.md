@@ -25,7 +25,8 @@ binaries) — run `:checkhealth ime-status` and it will tell you what to install
 | Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`)   |
 
 ```sh
-# macOS
+# macOS — use the full tap path. Plain `brew install macism` fails:
+# macism lives in a tap, not homebrew-core.
 brew install laishulu/homebrew/macism
 ```
 
