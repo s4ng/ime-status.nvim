@@ -1,8 +1,12 @@
-# ime-status.nvim
+<h1 align="center">ime-status.nvim</h1>
 
-<img width="500" height="312" alt="nvim demonstration" src="https://github.com/user-attachments/assets/e8986d4a-7f85-4cae-8c6c-aa17696a9a8e" />
+<p align="center">
+  <img width="500" height="312" alt="nvim demonstration" src="https://github.com/user-attachments/assets/e8986d4a-7f85-4cae-8c6c-aa17696a9a8e" />
+</p>
 
-### **English** | [한국어](README.ko.md)
+<p align="center">
+  <b>English</b> | <a href="README.ko.md">한국어</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a>
+</p>
 
 Show the current keyboard input method (한 / EN / あ / 中 …) in your Neovim
 statusline.
