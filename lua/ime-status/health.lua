@@ -13,6 +13,12 @@ function M.check()
     h.info("vim.system missing (nvim < 0.10) — falling back to jobstart")
   end
 
+  if backend.native() then
+    h.ok("native Windows backend active (LuaJIT FFI, user32/imm32) — no external tool needed")
+    h.info("detects the hangul/latin toggle inside the IME; im-select on PATH is ignored")
+    return
+  end
+
   local cmd = backend.default_cmd()
   if cmd then
     h.ok("input-source tool found: " .. table.concat(cmd, " "))
@@ -25,8 +31,11 @@ function M.check()
       "or: brew install im-select",
     })
   elseif vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1 then
-    h.error("im-select.exe not found on PATH", {
-      "scoop install im-select",
+    -- The FFI backend covers every standard Neovim build; reaching this means
+    -- a LuaJIT-less build, so fall back to the external tool.
+    h.error("FFI backend unavailable (no LuaJIT?) and im-select.exe not on PATH", {
+      "use a standard Neovim build (LuaJIT) for the built-in backend,",
+      "or: scoop install im-select",
       "or download from https://github.com/daipeihust/im-select",
     })
   else

@@ -17,14 +17,18 @@ lualine 只是下面示例之一。
 
 ## 依赖
 
-需要一个能输出当前输入源的外部工具。本插件**不会替你安装它**（Neovim 插件管理器只
-管理 git 仓库，不管理系统二进制文件）。运行 `:checkhealth ime-status` 会告诉你需要
-安装什么。
+**Windows 无需任何依赖**：插件通过内置的 LuaJIT FFI（user32/imm32）直接与 IME
+通信 —— 不需要外部工具，而且与 `im-select` 不同，它能检测中文/韩语/日语 IME
+**内部的中英文切换状态**。
+
+其他操作系统需要一个能输出当前输入源的外部工具。本插件**不会替你安装它**（Neovim
+插件管理器只管理 git 仓库，不管理系统二进制文件）。运行 `:checkhealth ime-status`
+会告诉你需要安装什么。
 
 | 操作系统 | 工具                                                                 |
 | -------- | -------------------------------------------------------------------- |
 | macOS    | [`macism`](https://github.com/laishulu/macism) 或 `im-select`        |
-| Windows  | [`im-select.exe`](https://github.com/daipeihust/im-select)           |
+| Windows  | 无需（内置 FFI 后端；仅无 LuaJIT 的构建需要 `im-select.exe`）        |
 | Linux    | `ibus` 或 `fcitx5-remote`（实验性 —— 可能需要自定义 `cmd`）          |
 
 ```sh
@@ -116,7 +120,8 @@ require("ime-status").setup({
 ```
 
 - `latin_source` 默认为操作系统的拉丁键盘布局（macOS `com.apple.keylayout.ABC`，
-  Linux ibus `xkb:us::eng`）。在 Windows 上请显式设置为你的 im-select id。
+  Linux ibus `xkb:us::eng`，Windows `"en"` —— FFI 后端在不改变键盘布局的情况下
+  仅将 IME 切换到英文模式）。
 - `restore_on_insert` 会记住插入期间使用的 IME，并在下一次 `InsertEnter` 时恢复 ——
   对需要输入 CJK 的缓冲区很方便。
 - `pause_on_focus_lost = true` 会在 Neovim 失去焦点时停止轮询定时器（在 `FocusGained`

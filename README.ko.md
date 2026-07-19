@@ -18,15 +18,19 @@ Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 �
 
 ## 요구 사항
 
-현재 입력 소스를 출력해 주는 외부 도구가 필요합니다. 이 플러그인은 해당 도구를
-**대신 설치하지 않습니다**(Neovim 플러그인 매니저는 git 레포만 관리하며 시스템
-바이너리는 관리하지 않습니다). `:checkhealth ime-status`를 실행하면 무엇을
-설치해야 하는지 알려줍니다.
+**Windows는 아무것도 필요 없습니다**: 내장 LuaJIT FFI(user32/imm32)로 IME와
+직접 통신합니다 — 외부 도구가 필요 없고, `im-select`와 달리 한국어/일본어/중국어
+IME **내부의 한/영 토글 상태**까지 감지합니다.
+
+그 외 OS는 현재 입력 소스를 출력해 주는 외부 도구가 필요합니다. 이 플러그인은
+해당 도구를 **대신 설치하지 않습니다**(Neovim 플러그인 매니저는 git 레포만
+관리하며 시스템 바이너리는 관리하지 않습니다). `:checkhealth ime-status`를
+실행하면 무엇을 설치해야 하는지 알려줍니다.
 
 | OS      | 도구                                                                 |
 | ------- | -------------------------------------------------------------------- |
 | macOS   | [`macism`](https://github.com/laishulu/macism) 또는 `im-select`      |
-| Windows | [`im-select.exe`](https://github.com/daipeihust/im-select)           |
+| Windows | 불필요 (내장 FFI 백엔드; LuaJIT 없는 빌드에서만 `im-select.exe`)     |
 | Linux   | `ibus` 또는 `fcitx5-remote` (실험적 — `cmd` 직접 지정이 필요할 수 있음) |
 
 ```sh
@@ -120,7 +124,8 @@ require("ime-status").setup({
 ```
 
 - `latin_source`의 기본값은 OS 영문 레이아웃입니다 (macOS `com.apple.keylayout.ABC`,
-  Linux ibus `xkb:us::eng`). Windows에서는 im-select id를 직접 지정하세요.
+  Linux ibus `xkb:us::eng`, Windows `"en"` — FFI 백엔드가 키보드 레이아웃은
+  유지한 채 IME만 영문 모드로 전환합니다).
 - `restore_on_insert`는 인서트 중 쓰던 IME를 기억했다가 다음 `InsertEnter`에서
   복원합니다 — 한글을 자주 입력하는 버퍼에 유용합니다.
 - `pause_on_focus_lost = true`는 Neovim이 비포커스일 때 폴링 타이머를 멈춥니다

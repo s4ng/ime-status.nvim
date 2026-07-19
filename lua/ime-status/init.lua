@@ -36,8 +36,10 @@ local function resolve(raw)
   return opts.default
 end
 
-local function get_cmd()
-  return config.options.cmd or backend.default_cmd()
+-- True when some detection path exists: a user-supplied cmd, the in-process
+-- FFI backend, or an external tool on PATH.
+local function available()
+  return config.options.cmd ~= nil or backend.available()
 end
 
 local function latin_source()
@@ -53,17 +55,19 @@ local function should_poll()
   return vim.fn.mode():sub(1, 1) == "i"
 end
 
--- Fetch the current raw id asynchronously and hand it to `cb` (nil on failure).
+-- Fetch the current raw id and hand it to `cb` (nil on failure). `cb` may run
+-- synchronously (FFI backend) or async (external tool).
 ---@param cb fun(raw:string|nil)
 local function fetch(cb)
-  local cmd = get_cmd()
-  if not cmd then
-    cb(nil)
-    return
-  end
-  backend.spawn(cmd, function(out)
+  local function on(out)
     cb(out and vim.trim(out) or nil)
-  end)
+  end
+  local cmd = config.options.cmd
+  if cmd then
+    backend.spawn(cmd, on)
+  else
+    backend.get(on)
+  end
 end
 
 -- Kick off one asynchronous detection. Cheap to call; the actual statusline
@@ -88,11 +92,7 @@ local function set_source(id)
   if not id then
     return
   end
-  local cmd = backend.set_cmd(id)
-  if not cmd then
-    return
-  end
-  backend.spawn(cmd, function()
+  backend.set(id, function()
     vim.schedule(M.refresh)
   end)
 end
@@ -117,7 +117,7 @@ function M.component()
 end
 
 local function start_polling()
-  if timer or not get_cmd() then
+  if timer or not available() then
     return
   end
   timer = assert((vim.uv or vim.loop).new_timer())
@@ -151,7 +151,7 @@ function M.setup(opts)
 
   -- No backend available: stay silent (get() returns the default label, and
   -- `:checkhealth ime-status` explains how to install a tool). Never error.
-  if not get_cmd() then
+  if not available() then
     return M
   end
 

@@ -20,14 +20,18 @@ below.
 
 ## Requirements
 
-An external tool that reports the current input source. The plugin does **not**
-install it for you (Neovim plugin managers manage git repos, not system
-binaries) — run `:checkhealth ime-status` and it will tell you what to install.
+**Windows needs nothing**: the plugin talks to the IME directly via the
+built-in LuaJIT FFI (user32/imm32) — no external tool, and unlike `im-select`
+it detects the hangul/latin toggle *inside* the Korean/Japanese/Chinese IME.
+
+Other OSes need an external tool that reports the current input source. The
+plugin does **not** install it for you (Neovim plugin managers manage git
+repos, not system binaries) — run `:checkhealth ime-status` for guidance.
 
 | OS      | Tool                                                                 |
 | ------- | -------------------------------------------------------------------- |
 | macOS   | [`macism`](https://github.com/laishulu/macism) or `im-select`        |
-| Windows | [`im-select.exe`](https://github.com/daipeihust/im-select)           |
+| Windows | none (built-in FFI backend; `im-select.exe` only for non-LuaJIT builds) |
 | Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`)   |
 
 ```sh
@@ -121,7 +125,8 @@ require("ime-status").setup({
 ```
 
 - `latin_source` defaults to the OS latin layout (macOS `com.apple.keylayout.ABC`,
-  Linux ibus `xkb:us::eng`). On Windows set it explicitly to your im-select id.
+  Linux ibus `xkb:us::eng`, Windows `"en"` — the FFI backend switches the IME to
+  latin mode without changing the keyboard layout).
 - `restore_on_insert` remembers the IME active during insert and restores it on
   the next `InsertEnter` — handy for buffers you write CJK in.
 - `pause_on_focus_lost = true` stops the polling timer while Neovim is

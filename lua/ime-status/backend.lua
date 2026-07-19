@@ -1,5 +1,26 @@
 local M = {}
 
+-- Resolved in-process (FFI) backend module, or false once probing failed.
+---@type table|false|nil
+local native_cache
+
+-- The in-process backend for this OS, or nil. Currently Windows only: LuaJIT
+-- FFI over user32/imm32, which needs no external tool and can see the
+-- hangul/latin toggle inside a CJK IME (im-select cannot).
+---@return table|nil
+function M.native()
+  if native_cache == nil then
+    native_cache = false
+    if vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1 then
+      local ok, win = pcall(require, "ime-status.ffi_win")
+      if ok and win.available() then
+        native_cache = win
+      end
+    end
+  end
+  return native_cache or nil
+end
+
 -- Resolve the command that prints the *current* input source / engine id on
 -- this OS, or nil when no supported tool is installed. The returned value is a
 -- list suitable for vim.system / jobstart.
@@ -63,7 +84,9 @@ function M.default_latin()
   if vim.fn.has("mac") == 1 then
     return "com.apple.keylayout.ABC"
   elseif vim.fn.has("win32") == 1 or vim.fn.has("win64") == 1 then
-    return nil
+    -- The FFI backend understands the symbolic id "en" (clear the IME's native
+    -- conversion mode, keeping the layout); im-select has no such id.
+    return M.native() and "en" or nil
   end
   return "xkb:us::eng"
 end
@@ -93,6 +116,57 @@ function M.spawn(cmd, cb)
       cb(code == 0 and table.concat(chunks, "\n") or nil)
     end,
   })
+end
+
+-- True when *some* detection path exists (FFI backend or an external tool).
+---@return boolean
+function M.available()
+  return M.native() ~= nil or M.default_cmd() ~= nil
+end
+
+-- Fetch the current raw id and hand it to `cb` (nil on failure). Prefers the
+-- in-process FFI backend — in which case `cb` runs synchronously — and falls
+-- back to spawning the external tool.
+---@param cb fun(raw:string|nil)
+function M.get(cb)
+  local native = M.native()
+  if native then
+    cb(native.get())
+    return
+  end
+  local cmd = M.default_cmd()
+  if not cmd then
+    cb(nil)
+    return
+  end
+  M.spawn(cmd, cb)
+end
+
+-- Set the input source to `id` via the FFI backend or the external tool.
+-- `cb` (optional) runs after the attempt, synchronously on the FFI path.
+---@param id string
+---@param cb fun()|nil
+function M.set(id, cb)
+  local native = M.native()
+  if native then
+    native.set(id)
+    if cb then
+      cb()
+    end
+    return
+  end
+  local cmd = M.set_cmd(id)
+  if not cmd then
+    if cb then
+      cb()
+    end
+    return
+  end
+  M.spawn(cmd, function()
+    if cb then
+      cb()
+    end
+  end)
 end
 
 return M

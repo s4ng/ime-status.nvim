@@ -19,15 +19,19 @@ OS が管理しているためです。このプラグインは小さな外部�
 
 ## 必要なもの
 
-現在の入力ソースを出力する外部ツールが必要です。このプラグインはそれを**代わりに
-インストールしません**（Neovim のプラグインマネージャは git リポジトリのみを管理し、
-システムバイナリは管理しません）。`:checkhealth ime-status` を実行すると、何を
-インストールすべきか教えてくれます。
+**Windows は何も必要ありません**: 内蔵の LuaJIT FFI（user32/imm32）で IME と
+直接通信します — 外部ツール不要で、`im-select` と違い日本語/韓国語/中国語 IME
+**内部のかな/英数トグル状態**まで検出します。
+
+その他の OS では現在の入力ソースを出力する外部ツールが必要です。このプラグインは
+それを**代わりにインストールしません**（Neovim のプラグインマネージャは git
+リポジトリのみを管理し、システムバイナリは管理しません）。`:checkhealth
+ime-status` を実行すると、何をインストールすべきか教えてくれます。
 
 | OS      | ツール                                                               |
 | ------- | -------------------------------------------------------------------- |
 | macOS   | [`macism`](https://github.com/laishulu/macism) または `im-select`    |
-| Windows | [`im-select.exe`](https://github.com/daipeihust/im-select)           |
+| Windows | 不要（内蔵 FFI バックエンド; LuaJIT なしビルドのみ `im-select.exe`）  |
 | Linux   | `ibus` または `fcitx5-remote`（実験的 — `cmd` の指定が必要な場合あり） |
 
 ```sh
@@ -121,7 +125,8 @@ require("ime-status").setup({
 ```
 
 - `latin_source` のデフォルトは OS のラテン配列です（macOS `com.apple.keylayout.ABC`、
-  Linux ibus `xkb:us::eng`）。Windows では im-select の id を明示的に指定してください。
+  Linux ibus `xkb:us::eng`、Windows `"en"` — FFI バックエンドはキーボード配列を
+  変えずに IME だけを英数モードへ切り替えます）。
 - `restore_on_insert` は挿入中に使っていた IME を記憶し、次の `InsertEnter` で
   復元します — CJK を入力するバッファに便利です。
 - `pause_on_focus_lost = true` は Neovim が非フォーカスの間ポーリングタイマーを
