@@ -37,6 +37,8 @@ do
       const char* CFStringGetCStringPtr(const void* str, uint32_t encoding);
       unsigned char CFStringGetCString(const void* str, char* buf, long size, uint32_t encoding);
       long        CFStringGetLength(const void* str);
+      int32_t     CFRunLoopRunInMode(const void* mode, double seconds, unsigned char returnAfterSourceHandled);
+      const void* kCFRunLoopDefaultMode;
 
       void*       TISCopyCurrentKeyboardInputSource(void);
       void*       TISGetInputSourceProperty(void* src, const void* key);
@@ -55,6 +57,8 @@ do
       and pcall(function()
         return CF.CFRelease,
           CF.CFStringGetCStringPtr,
+          CF.CFRunLoopRunInMode,
+          CF.kCFRunLoopDefaultMode,
           TIS.TISCopyCurrentKeyboardInputSource,
           TIS.TISGetInputSourceProperty,
           TIS.TISCreateInputSourceList,
@@ -102,6 +106,15 @@ function M.get()
   if not ready then
     return nil
   end
+  -- TIS caches the current input source *per process* and only refreshes that
+  -- cache when the process's run loop delivers the change notification. Neovim
+  -- runs on libuv, so its CFRunLoop never turns on its own and every later
+  -- get() would report the source that was active at startup — the 한/영 key
+  -- would move the real IME while the statusline sat frozen. Draining pending
+  -- sources with a zero timeout is what makes an in-process reader see
+  -- externally-driven switches at all; it returns immediately when there is
+  -- nothing queued, which is the common case.
+  CF.CFRunLoopRunInMode(CF.kCFRunLoopDefaultMode, 0, false)
   local src = TIS.TISCopyCurrentKeyboardInputSource()
   if src == nil then
     return nil
