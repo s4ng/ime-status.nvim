@@ -11,32 +11,36 @@
 현재 키보드 입력기(한 / EN / あ / 中 …)를 Neovim 상태줄(statusline)에 표시합니다.
 
 Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 에디터가 아니라
-운영체제가 관리하기 때문입니다. 이 플러그인은 외부 도구에 현재 입력 소스를
-물어보고, 그 결과를 **캐싱**한 뒤, 타이머와 모드 전환 시점에 비동기로 갱신하고,
-어떤 상태줄에든 꽂을 수 있는 빠른 게터(getter)를 제공합니다. **lualine 전용이
+운영체제가 관리하기 때문입니다. 이 플러그인은 현재 입력 소스를 OS에서 직접 읽어
+그 결과를 **캐싱**한 뒤, 타이머와 모드 전환 시점에 비동기로 갱신하고, 어떤
+상태줄에든 꽂을 수 있는 빠른 게터(getter)를 제공합니다. **lualine 전용이
 아닙니다** — lualine은 아래 예시 중 하나일 뿐입니다.
 
 ## 요구 사항
 
-**macOS와 Windows는 아무것도 필요 없습니다**: 내장 LuaJIT FFI로 IME와 직접
-통신합니다 — 외부 도구도, 설치할 것도, `PATH`에서 찾아야 할 것도 없습니다.
+Neovim만 있으면 됩니다. macOS와 Windows에서는 내장 LuaJIT FFI로 IME를 프로세스
+안에서 직접 조회하므로, 함께 설치할 바이너리도 `PATH`에서 찾아야 할 것도
+없습니다.
 
-| OS      | 도구                                                                 |
+| OS      | 설치할 것                                                            |
 | ------- | -------------------------------------------------------------------- |
-| macOS   | 불필요 (내장 FFI 백엔드; LuaJIT 없는 빌드에서만 `macism`)            |
-| Windows | 불필요 (내장 FFI 백엔드; LuaJIT 없는 빌드에서만 `im-select.exe`)     |
+| macOS   | 없음 — 내장 FFI 백엔드 (Carbon TIS)                                  |
+| Windows | 없음 — 내장 FFI 백엔드 (user32/imm32)                                |
 | Linux   | `ibus` 또는 `fcitx5-remote` (실험적 — `cmd` 직접 지정이 필요할 수 있음) |
 
-macOS에서는 Carbon TIS API를 직접 호출합니다. `macism`이 감싸고 있는 것과 같은
-API라 입력 소스 id도 동일하며, Homebrew 설치가 필요 없고 `.app`이나 Automator
-액션으로 띄운 Neovim에서 `PATH` 때문에 도구를 못 찾던 문제도 사라집니다.
-Windows에서는 user32/imm32를 사용하며, `im-select`와 달리 한국어/일본어/중국어
-IME **내부의 한/영 토글 상태**까지 감지합니다.
+macOS 백엔드는 Carbon TIS API를 호출하므로 입력 소스 id가 시스템 전역에서 쓰이는
+값과 정확히 같습니다. Windows 백엔드는 user32/imm32를 거치는데, 덕분에
+한국어/일본어/중국어 IME **내부의 한/영 토글 상태**까지 보입니다 — `im-select`
+같은 레이아웃 조회 도구로는 아예 알 수 없는 상태입니다.
 
-Linux는 여전히 현재 입력 소스를 출력해 주는 외부 도구가 필요합니다. 이
-플러그인은 해당 도구를 **대신 설치하지 않습니다**(Neovim 플러그인 매니저는 git
-레포만 관리하며 시스템 바이너리는 관리하지 않습니다). `:checkhealth ime-status`를
-실행하면 무엇을 설치해야 하는지 알려줍니다.
+**Linux만 예외입니다.** 호출할 OS 수준 API가 없고 입력기가 상태를 자체 CLI로만
+노출하기 때문에, 플러그인이 `ibus`나 `fcitx5-remote`(쓰는 입력기에 딸려 오는 쪽)를
+실행할 수밖에 없습니다. 이 플러그인은 그 도구를 **대신 설치하지 않습니다**(Neovim
+플러그인 매니저는 git 레포만 관리하며 시스템 바이너리는 관리하지 않습니다).
+`:checkhealth ime-status`를 실행하면 무엇을 설치해야 하는지 알려줍니다.
+
+> LuaJIT이 아닌 순수 Lua로 빌드된 Neovim에는 FFI가 없습니다. 이 경우
+> `macism` / `im-select.exe`가 `PATH`에 있으면 그쪽으로 넘어갑니다.
 
 ## 설치
 
@@ -88,8 +92,9 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 폴링 주기 (ms)
   insert_only = false,   -- 인서트 모드일 때만 폴링
-  tool = nil,            -- 입력 소스 도구의 이름 또는 절대경로. 상태 읽기와 전환에 모두 사용.
-                         -- 예: "/opt/homebrew/bin/macism"
+  tool = nil,            -- Linux용, 또는 네이티브 백엔드를 끌 때: 입력 소스 도구의 이름
+                         -- 또는 절대경로. 상태 읽기와 전환에 모두 사용.
+                         -- 예: "/usr/bin/fcitx5-remote"
   cmd = nil,             -- 저수준: 탐지 명령만 직접 지정
   set_cmd = nil,         -- 저수준: 전환 명령만 직접 지정. 리스트를 주면 뒤에 대상 id가
                          -- 붙고, function(id) -> { ... } 형태도 가능
@@ -146,20 +151,21 @@ end
 
 - **폴링은 불가피합니다.** 터미널 환경에는 "방금 OS가 IME를 전환했다"는 이벤트가
   없으므로, 상태는 `interval`(ms)마다(그리고 모드 전환 시 즉시) 샘플링됩니다.
-  `interval`을 낮추면 반응이 빠르지만 그만큼 서브프로세스가 자주 실행되고, 높이거나
-  `insert_only = true`로 두면 비용이 줄어듭니다.
-- **도구가 설치되지 않았다면?** 플러그인은 우아하게 비활성화됩니다 — `get()`은
-  `default`를 반환하고 에러는 발생하지 않습니다. 탐지는 사용 중에도 계속 재시도되므로
-  나중에 도구를 설치해도 Neovim을 재시작할 필요가 없고, 바로 확인하려면
+  macOS와 Windows에서는 한 번의 샘플링이 프로세스 내부 FFI 호출이라 기본값 300ms도
+  사실상 비용이 없습니다. Linux에서는 매 샘플링마다 `ibus`/`fcitx5-remote`가
+  실행되므로, 부담이 느껴지면 `interval`을 높이거나 `insert_only = true`로 두세요.
+- **Linux에서 도구가 설치되지 않았다면?** 플러그인은 우아하게 비활성화됩니다 —
+  `get()`은 `default`를 반환하고 에러는 발생하지 않습니다. 탐지는 사용 중에도 계속
+  재시도되므로 나중에 도구를 설치해도 Neovim을 재시작할 필요가 없고, 바로 확인하려면
   `:IMEStatusReload`를 실행하세요. `:checkhealth ime-status`도 참고하세요.
-- **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?**
-  Linux이거나, `tool`/`cmd`를 지정해 FFI 백엔드를 끈 경우에만 해당됩니다. macOS
-  `.app` / Automator 액션, Neovide, `.desktop` 런처 등은 셸 rc 파일을 읽지 않으므로
-  `PATH`에 `/opt/homebrew/bin` 같은 경로가 빠져 도구를 찾지 못합니다. `:echo
-  $PATH`로 확인한 뒤, 런처의 환경을 고치거나 도구 경로를 직접 지정하세요:
+- **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?** Linux에서 생기는 문제이며,
+  macOS/Windows에서는 `tool`/`cmd`를 지정해 네이티브 백엔드를 끈 경우에만 해당됩니다.
+  `.desktop` 런처, Neovide, macOS `.app` 등은 셸 rc 파일을 읽지 않으므로 `PATH`에서
+  도구를 찾지 못합니다. `:echo $PATH`로 확인한 뒤, 런처의 환경을 고치거나 절대경로를
+  직접 지정하세요:
 
   ```lua
-  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  require("ime-status").setup({ tool = "/usr/bin/fcitx5-remote" })
   ```
 
 ## 라이선스

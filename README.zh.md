@@ -11,29 +11,32 @@
 在 Neovim 状态栏中显示当前键盘输入法（한 / EN / あ / 中 …）。
 
 Neovim 本身并不知道操作系统当前处于哪种 IME 状态 —— 中英文切换由操作系统管理，而非
-编辑器。本插件通过一个小型外部工具查询当前输入源，**缓存**结果，并在定时器和模式切换
-时异步刷新，同时提供一个可嵌入任意状态栏的快速 getter。它**并不局限于 lualine** ——
+编辑器。本插件直接从操作系统读取当前输入源，**缓存**结果，并在定时器和模式切换时
+异步刷新，同时提供一个可嵌入任意状态栏的快速 getter。它**并不局限于 lualine** ——
 lualine 只是下面示例之一。
 
 ## 依赖
 
-**macOS 和 Windows 无需任何依赖**：插件通过内置的 LuaJIT FFI 直接与 IME 通信
-—— 不需要外部工具，无需安装，也不用在 `PATH` 里查找任何东西。
+只需要 Neovim。在 macOS 和 Windows 上，插件通过内置的 LuaJIT FFI 在进程内直接查询
+IME —— 没有需要一并安装的二进制文件，也不用在 `PATH` 里查找任何东西。
 
-| 操作系统 | 工具                                                                 |
+| 操作系统 | 需要安装什么                                                         |
 | -------- | -------------------------------------------------------------------- |
-| macOS    | 无需（内置 FFI 后端；仅无 LuaJIT 的构建需要 `macism`）               |
-| Windows  | 无需（内置 FFI 后端；仅无 LuaJIT 的构建需要 `im-select.exe`）        |
+| macOS    | 无 —— 内置 FFI 后端（Carbon TIS）                                    |
+| Windows  | 无 —— 内置 FFI 后端（user32/imm32）                                  |
 | Linux    | `ibus` 或 `fcitx5-remote`（实验性 —— 可能需要自定义 `cmd`）          |
 
-macOS 上直接调用 Carbon 的 TIS API —— 正是 `macism` 所封装的那套 API，因此输入源
-id 完全相同，但不再需要 Homebrew 安装，也不再有从 `.app` 或 Automator 动作启动
-Neovim 时找不到工具的 `PATH` 问题。Windows 上使用 user32/imm32，与 `im-select`
-不同，它能检测中文/韩语/日语 IME **内部的中英文切换状态**。
+macOS 后端调用 Carbon 的 TIS API，因此读到的输入源 id 与系统全局使用的完全一致。
+Windows 后端走 user32/imm32，这也让中文/韩语/日语 IME **内部的中英文切换状态**变得
+可见 —— 这是 `im-select` 这类只查询键盘布局的工具根本无法得知的状态。
 
-Linux 仍然需要一个能输出当前输入源的外部工具。本插件**不会替你安装它**（Neovim
-插件管理器只管理 git 仓库，不管理系统二进制文件）。运行 `:checkhealth ime-status`
-会告诉你需要安装什么。
+**Linux 是唯一的例外。** 那里没有可调用的系统级 API，输入法只通过自己的 CLI 暴露
+状态，所以插件只能去执行 `ibus` 或 `fcitx5-remote`（取决于你用的是哪个输入法）。
+本插件**不会替你安装它**（Neovim 插件管理器只管理 git 仓库，不管理系统二进制
+文件）。运行 `:checkhealth ime-status` 会告诉你需要安装什么。
+
+> 用纯 Lua 而非 LuaJIT 构建的 Neovim 没有 FFI。此时若 `PATH` 中存在
+> `macism` / `im-select.exe`，插件会回退到它们。
 
 ## 安装
 
@@ -83,8 +86,8 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 轮询间隔（毫秒）
   insert_only = false,   -- 仅在插入模式下轮询
-  tool = nil,            -- 输入源工具的名称或绝对路径，读取状态和切换都会使用，
-                         -- 例如 "/opt/homebrew/bin/macism"
+  tool = nil,            -- 用于 Linux，或用于关闭原生后端：输入源工具的名称或绝对路径，
+                         -- 读取状态和切换都会使用，例如 "/usr/bin/fcitx5-remote"
   cmd = nil,             -- 底层：仅覆盖检测命令
   set_cmd = nil,         -- 底层：仅覆盖切换命令。传列表时会在末尾追加目标 id，
                          -- 也可以传 function(id) -> { ... }
@@ -140,19 +143,21 @@ end
 ## 说明与权衡
 
 - **轮询是必要的。** 在终端环境中没有“操作系统刚刚切换了 IME”这样的事件，因此状态会
-  每隔 `interval`（毫秒）采样一次（并在模式切换时立即采样）。`interval` 越低响应越快，
-  但子进程启动也越频繁；调高它，或设置 `insert_only = true`，可以降低开销。
-- **没有安装工具？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。检测会在
-  使用过程中持续重试，所以之后再安装工具也无需重启 Neovim；想立即验证可以运行
-  `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
-- **在终端里正常，但从 GUI 启动 Neovim 就不行？**
-  只有在 Linux 上，或你指定了 `tool`/`cmd` 从而关闭了 FFI 后端时才会发生。macOS
-  的 `.app` / Automator 动作、Neovide、`.desktop` 启动器等不会读取 shell 的 rc
-  文件，因此 `PATH` 中缺少 `/opt/homebrew/bin` 之类的路径，找不到工具。请用
-  `:echo $PATH` 确认，然后修复启动器的环境，或直接指定工具路径：
+  每隔 `interval`（毫秒）采样一次（并在模式切换时立即采样）。在 macOS 和 Windows 上，
+  一次采样就是一次进程内的 FFI 调用，所以默认的 300 ms 几乎没有开销。在 Linux 上每次
+  采样都会启动 `ibus`/`fcitx5-remote`，若觉得有负担，可调高 `interval` 或设置
+  `insert_only = true`。
+- **Linux 上没有安装工具？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。
+  检测会在使用过程中持续重试，所以之后再安装工具也无需重启 Neovim；想立即验证可以
+  运行 `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
+- **在终端里正常，但从 GUI 启动 Neovim 就不行？** 这是 Linux 上的问题；在
+  macOS/Windows 上只有当你指定了 `tool`/`cmd` 从而关闭原生后端时才会出现。
+  `.desktop` 启动器、Neovide、macOS 的 `.app` 等不会读取 shell 的 rc 文件，因此在
+  `PATH` 中找不到工具。请用 `:echo $PATH` 确认，然后修复启动器的环境，或直接指定
+  绝对路径：
 
   ```lua
-  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  require("ime-status").setup({ tool = "/usr/bin/fcitx5-remote" })
   ```
 
 ## 许可证
