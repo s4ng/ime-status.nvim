@@ -19,8 +19,13 @@ function M.check()
   end
 
   if backend.native() then
-    h.ok("native Windows backend active (LuaJIT FFI, user32/imm32) — no external tool needed")
-    h.info("detects the hangul/latin toggle inside the IME; im-select on PATH is ignored")
+    if vim.fn.has("mac") == 1 then
+      h.ok("native macOS backend active (LuaJIT FFI, CoreFoundation/TIS) — no external tool needed")
+      h.info("reads the same input-source ids macism prints; macism/im-select on PATH is ignored")
+    else
+      h.ok("native Windows backend active (LuaJIT FFI, user32/imm32) — no external tool needed")
+      h.info("detects the hangul/latin toggle inside the IME; im-select on PATH is ignored")
+    end
     return
   end
 
@@ -41,7 +46,9 @@ function M.check()
     .. "so PATH differs — check :echo $PATH, or set opts.tool to an absolute path"
 
   if vim.fn.has("mac") == 1 then
-    h.error("no input-source tool found on PATH", {
+    -- The FFI backend covers every standard Neovim build, so reaching here
+    -- means either a LuaJIT-less build or opts.tool/cmd opting out of it.
+    h.error("no native FFI backend (LuaJIT-less build, or disabled by opts.tool/cmd) and no macism on PATH", {
       path_hint,
       "otherwise: brew install laishulu/homebrew/macism",
     })

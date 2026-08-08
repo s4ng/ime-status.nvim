@@ -19,26 +19,25 @@ OS が管理しているためです。このプラグインは小さな外部�
 
 ## 必要なもの
 
-**Windows は何も必要ありません**: 内蔵の LuaJIT FFI（user32/imm32）で IME と
-直接通信します — 外部ツール不要で、`im-select` と違い日本語/韓国語/中国語 IME
-**内部のかな/英数トグル状態**まで検出します。
-
-その他の OS では現在の入力ソースを出力する外部ツールが必要です。このプラグインは
-それを**代わりにインストールしません**（Neovim のプラグインマネージャは git
-リポジトリのみを管理し、システムバイナリは管理しません）。`:checkhealth
-ime-status` を実行すると、何をインストールすべきか教えてくれます。
+**macOS と Windows は何も必要ありません**: 内蔵の LuaJIT FFI で IME と直接
+通信します — 外部ツールも、インストール作業も、`PATH` から探すものもありません。
 
 | OS      | ツール                                                               |
 | ------- | -------------------------------------------------------------------- |
-| macOS   | [`macism`](https://github.com/laishulu/macism) または `im-select`    |
+| macOS   | 不要（内蔵 FFI バックエンド; LuaJIT なしビルドのみ `macism`）         |
 | Windows | 不要（内蔵 FFI バックエンド; LuaJIT なしビルドのみ `im-select.exe`）  |
 | Linux   | `ibus` または `fcitx5-remote`（実験的 — `cmd` の指定が必要な場合あり） |
 
-```sh
-# macOS — 必ず tap パスを含めてください。単なる `brew install macism` は
-# 失敗します（macism は homebrew-core ではなく別の tap にあります）。
-brew install laishulu/homebrew/macism
-```
+macOS では Carbon の TIS API を直接呼びます。`macism` がラップしているのと同じ
+API なので入力ソース id も同じで、Homebrew でのインストールが不要になり、`.app`
+や Automator アクションから起動した Neovim で `PATH` にツールが見つからない問題も
+なくなります。Windows では user32/imm32 を使い、`im-select` と違い日本語/韓国語/
+中国語 IME **内部のかな/英数トグル状態**まで検出します。
+
+Linux では引き続き現在の入力ソースを出力する外部ツールが必要です。このプラグインは
+それを**代わりにインストールしません**（Neovim のプラグインマネージャは git
+リポジトリのみを管理し、システムバイナリは管理しません）。`:checkhealth
+ime-status` を実行すると、何をインストールすべきか教えてくれます。
 
 ## インストール
 
@@ -155,9 +154,10 @@ end
   ツールをインストールしても Neovim の再起動は不要です。すぐ確認したい場合は
   `:IMEStatusReload` を実行してください。`:checkhealth ime-status` も参照してください。
 - **ターミナルでは動くのに GUI から起動すると動かない?**
-  （macOS の `.app` / Automator アクション、Neovide、`.desktop` ランチャーなど）
-  これらはシェルの rc ファイルを読まないため、`PATH` から `/opt/homebrew/bin` などが
-  抜けてツールを見つけられません。`:echo $PATH` で確認し、ランチャー側の環境を直すか、
+  Linux か、`tool`/`cmd` を指定して FFI バックエンドを無効にした場合のみ起こります。
+  macOS の `.app` / Automator アクション、Neovide、`.desktop` ランチャーなどは
+  シェルの rc ファイルを読まないため、`PATH` から `/opt/homebrew/bin` などが抜けて
+  ツールを見つけられません。`:echo $PATH` で確認し、ランチャー側の環境を直すか、
   ツールのパスを直接指定してください:
 
   ```lua

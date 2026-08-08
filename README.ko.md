@@ -18,26 +18,25 @@ Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 �
 
 ## 요구 사항
 
-**Windows는 아무것도 필요 없습니다**: 내장 LuaJIT FFI(user32/imm32)로 IME와
-직접 통신합니다 — 외부 도구가 필요 없고, `im-select`와 달리 한국어/일본어/중국어
-IME **내부의 한/영 토글 상태**까지 감지합니다.
-
-그 외 OS는 현재 입력 소스를 출력해 주는 외부 도구가 필요합니다. 이 플러그인은
-해당 도구를 **대신 설치하지 않습니다**(Neovim 플러그인 매니저는 git 레포만
-관리하며 시스템 바이너리는 관리하지 않습니다). `:checkhealth ime-status`를
-실행하면 무엇을 설치해야 하는지 알려줍니다.
+**macOS와 Windows는 아무것도 필요 없습니다**: 내장 LuaJIT FFI로 IME와 직접
+통신합니다 — 외부 도구도, 설치할 것도, `PATH`에서 찾아야 할 것도 없습니다.
 
 | OS      | 도구                                                                 |
 | ------- | -------------------------------------------------------------------- |
-| macOS   | [`macism`](https://github.com/laishulu/macism) 또는 `im-select`      |
+| macOS   | 불필요 (내장 FFI 백엔드; LuaJIT 없는 빌드에서만 `macism`)            |
 | Windows | 불필요 (내장 FFI 백엔드; LuaJIT 없는 빌드에서만 `im-select.exe`)     |
 | Linux   | `ibus` 또는 `fcitx5-remote` (실험적 — `cmd` 직접 지정이 필요할 수 있음) |
 
-```sh
-# macOS — 반드시 tap 경로를 포함해야 합니다. 그냥 `brew install macism`은
-# 실패합니다 (macism은 homebrew-core가 아니라 별도 tap에 있습니다).
-brew install laishulu/homebrew/macism
-```
+macOS에서는 Carbon TIS API를 직접 호출합니다. `macism`이 감싸고 있는 것과 같은
+API라 입력 소스 id도 동일하며, Homebrew 설치가 필요 없고 `.app`이나 Automator
+액션으로 띄운 Neovim에서 `PATH` 때문에 도구를 못 찾던 문제도 사라집니다.
+Windows에서는 user32/imm32를 사용하며, `im-select`와 달리 한국어/일본어/중국어
+IME **내부의 한/영 토글 상태**까지 감지합니다.
+
+Linux는 여전히 현재 입력 소스를 출력해 주는 외부 도구가 필요합니다. 이
+플러그인은 해당 도구를 **대신 설치하지 않습니다**(Neovim 플러그인 매니저는 git
+레포만 관리하며 시스템 바이너리는 관리하지 않습니다). `:checkhealth ime-status`를
+실행하면 무엇을 설치해야 하는지 알려줍니다.
 
 ## 설치
 
@@ -154,10 +153,10 @@ end
   나중에 도구를 설치해도 Neovim을 재시작할 필요가 없고, 바로 확인하려면
   `:IMEStatusReload`를 실행하세요. `:checkhealth ime-status`도 참고하세요.
 - **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?**
-  (macOS `.app` / Automator 액션, Neovide, `.desktop` 런처 등) 이런 방식은 셸 rc
-  파일을 읽지 않으므로 `PATH`에 `/opt/homebrew/bin` 같은 경로가 빠져 도구를 찾지
-  못합니다. `:echo $PATH`로 확인한 뒤, 런처의 환경을 고치거나 도구 경로를 직접
-  지정하세요:
+  Linux이거나, `tool`/`cmd`를 지정해 FFI 백엔드를 끈 경우에만 해당됩니다. macOS
+  `.app` / Automator 액션, Neovide, `.desktop` 런처 등은 셸 rc 파일을 읽지 않으므로
+  `PATH`에 `/opt/homebrew/bin` 같은 경로가 빠져 도구를 찾지 못합니다. `:echo
+  $PATH`로 확인한 뒤, 런처의 환경을 고치거나 도구 경로를 직접 지정하세요:
 
   ```lua
   require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
