@@ -32,7 +32,9 @@ else
     { exe = "ibus", get = { "engine" }, set = function(id)
       return { "engine", id }
     end },
-    { exe = "fcitx5-remote", get = { "-n" } },
+    { exe = "fcitx5-remote", get = { "-n" }, set = function(id)
+      return { "-s", id }
+    end },
   }
 end
 
