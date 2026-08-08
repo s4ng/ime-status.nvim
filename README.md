@@ -89,7 +89,11 @@ Defaults:
 require("ime-status").setup({
   interval = 300,        -- polling interval (ms)
   insert_only = false,   -- only poll while in insert mode
-  cmd = nil,             -- override detection command, e.g. { "im-select" }
+  tool = nil,            -- name or absolute path of the input-source tool, used for
+                         -- both reading and switching, e.g. "/opt/homebrew/bin/macism"
+  cmd = nil,             -- low-level: override only the detection command
+  set_cmd = nil,         -- low-level: override only the switch command; a list gets
+                         -- the target id appended, or pass function(id) -> { ... }
   labels = {             -- first match (case-insensitive substring) wins
     { match = "korean",   text = "한" },
     { match = "hangul",   text = "한" },
@@ -147,7 +151,18 @@ end
   mode change). Lower `interval` = snappier but more subprocess spawns; raise it,
   or set `insert_only = true`, to reduce cost.
 - **No tool installed?** The plugin degrades gracefully: `get()` returns
-  `default` and nothing errors. See `:checkhealth ime-status`.
+  `default` and nothing errors. Detection is retried while you work, so
+  installing the tool later starts working without restarting Neovim — or run
+  `:IMEStatusReload` to re-detect right away. See `:checkhealth ime-status`.
+- **Works in a terminal but not when Neovim is launched from a GUI?**
+  (a macOS `.app` / Automator action, Neovide, a `.desktop` launcher …) Those do
+  not read your shell rc, so `/opt/homebrew/bin` and friends are missing from
+  `PATH` and the tool cannot be found. Check `:echo $PATH`, and either fix the
+  launcher's environment or pin the tool:
+
+  ```lua
+  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  ```
 
 ## License
 

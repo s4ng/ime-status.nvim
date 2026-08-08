@@ -52,9 +52,22 @@ interval     (number, default 300)
 insert_only  (boolean, default false)
              Only poll while in insert mode.
 
+tool         (string|nil, default nil)
+             Name or absolute path of the input-source tool, used for both
+             reading the current source and switching it, e.g.
+             "/opt/homebrew/bin/macism". When nil the tool is auto-detected on
+             the PATH for the current OS. Set this when Neovim is launched from
+             a GUI and cannot see your shell PATH (see |ime-status-health|).
+
 cmd          (string[]|nil, default nil)
-             Override the detection command, e.g. { "im-select" }. When nil the
-             command is auto-detected for the current OS.
+             Low-level override of the *detection* command only, e.g.
+             { "im-select" }. The switch command is derived from cmd[1] unless
+             `set_cmd` is given.
+
+set_cmd      (string[]|fun(id):string[]|nil, default nil)
+             Low-level override of the *switch* command only. A list gets the
+             target id appended; a function receives the id and returns the
+             full argv.
 
 labels       (list, default 한/あ/中 rules)
              Ordered { match = <pattern>, text = <label> } rules. `match` is a
@@ -93,7 +106,10 @@ pause_on_focus_lost  (boolean, default false)
 5. API                                                         *ime-status-api*
 
 require("ime-status").setup({opts})                          *ime-status.setup*
-        Merge options, start polling, register autocmds. Idempotent.
+        Merge options, start polling, register autocmds. Idempotent. Never
+        errors and never disables itself: when no backend can be found the
+        plugin simply does nothing and keeps re-detecting, so a tool installed
+        (or a PATH fixed) later starts working without restarting Neovim.
 
 require("ime-status").get()                                    *ime-status.get*
         Return the current label string. Reads the cache; never blocks.
@@ -107,13 +123,23 @@ require("ime-status").refresh()                            *ime-status.refresh*
                                                       *ime-status-IMEStatusChanged*
 A `User IMEStatusChanged` autocmd fires whenever the cached label changes.
 
+:IMEStatusReload                                          *:IMEStatusReload*
+        Drop the cached backend probe and re-detect now, reporting what was
+        found. Useful right after installing an input-source tool.
+
 ==============================================================================
 6. HEALTH                                                   *ime-status-health*
 
   :checkhealth ime-status
 
 Reports which backend is active (the native FFI backend on Windows, otherwise
-a supported input-source tool on the PATH) and, when none is available, the
-command to install one for your OS.
+a supported input-source tool on the PATH), whether that tool can switch as
+well as report, and, when none is available, how to install one.
+
+If the tool works in a terminal but not here, the cause is almost always PATH:
+Neovim launched from a GUI (a macOS .app or Automator action, Neovide, a
+.desktop launcher) does not read your shell rc files, so directories such as
+/opt/homebrew/bin are missing. Check `:echo $PATH`, then either fix the
+launcher's environment or set `tool` to an absolute path.
 
 vim:tw=78:ts=8:ft=help:norl:

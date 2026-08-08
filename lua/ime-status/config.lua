@@ -7,7 +7,9 @@ local M = {}
 ---@class IMEStatusConfig
 ---@field interval integer        Polling interval in milliseconds
 ---@field insert_only boolean     Only poll while in insert mode (saves CPU)
----@field cmd string[]|nil        Override the detection command (list form for vim.system); nil = auto-detect per OS
+---@field tool string|nil         Name or absolute path of the input-source tool, used for both reading and switching; nil = auto-detect per OS
+---@field cmd string[]|nil        Low-level override of the *detection* command (list form for vim.system); nil = derive from `tool`
+---@field set_cmd string[]|fun(id:string):string[]|nil  Low-level override of the *switch* command; a list gets `id` appended. nil = derive from `tool`
 ---@field labels IMEStatusLabel[] Ordered rules mapping a raw id to display text; first match wins
 ---@field default string         Shown when no label rule matches (typically the latin/english state)
 ---@field unknown string         Shown when the backend produced no usable output
@@ -21,7 +23,9 @@ local M = {}
 M.defaults = {
   interval = 300,
   insert_only = false,
+  tool = nil,
   cmd = nil,
+  set_cmd = nil,
   -- Matched in order against the lower-cased raw id reported by the backend.
   -- Covers the common identifiers across macism / im-select / ibus / fcitx5.
   labels = {

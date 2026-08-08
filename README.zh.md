@@ -85,7 +85,11 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 轮询间隔（毫秒）
   insert_only = false,   -- 仅在插入模式下轮询
-  cmd = nil,             -- 覆盖检测命令，例如 { "im-select" }
+  tool = nil,            -- 输入源工具的名称或绝对路径，读取状态和切换都会使用，
+                         -- 例如 "/opt/homebrew/bin/macism"
+  cmd = nil,             -- 底层：仅覆盖检测命令
+  set_cmd = nil,         -- 底层：仅覆盖切换命令。传列表时会在末尾追加目标 id，
+                         -- 也可以传 function(id) -> { ... }
   labels = {             -- 采用第一个匹配的规则（不区分大小写的子串匹配）
     { match = "korean",   text = "한" },
     { match = "hangul",   text = "한" },
@@ -140,8 +144,17 @@ end
 - **轮询是必要的。** 在终端环境中没有“操作系统刚刚切换了 IME”这样的事件，因此状态会
   每隔 `interval`（毫秒）采样一次（并在模式切换时立即采样）。`interval` 越低响应越快，
   但子进程启动也越频繁；调高它，或设置 `insert_only = true`，可以降低开销。
-- **没有安装工具？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。请参阅
-  `:checkhealth ime-status`。
+- **没有安装工具？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。检测会在
+  使用过程中持续重试，所以之后再安装工具也无需重启 Neovim；想立即验证可以运行
+  `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
+- **在终端里正常，但从 GUI 启动 Neovim 就不行？**
+  （macOS 的 `.app` / Automator 动作、Neovide、`.desktop` 启动器等）它们不会读取
+  shell 的 rc 文件，因此 `PATH` 中缺少 `/opt/homebrew/bin` 之类的路径，找不到工具。
+  请用 `:echo $PATH` 确认，然后修复启动器的环境，或直接指定工具路径：
+
+  ```lua
+  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  ```
 
 ## 许可证
 

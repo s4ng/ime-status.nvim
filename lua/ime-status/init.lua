@@ -36,12 +36,6 @@ local function resolve(raw)
   return opts.default
 end
 
--- True when some detection path exists: a user-supplied cmd, the in-process
--- FFI backend, or an external tool on PATH.
-local function available()
-  return config.options.cmd ~= nil or backend.available()
-end
-
 local function latin_source()
   return config.options.latin_source or backend.default_latin()
 end
@@ -59,20 +53,21 @@ end
 -- synchronously (FFI backend) or async (external tool).
 ---@param cb fun(raw:string|nil)
 local function fetch(cb)
-  local function on(out)
+  backend.get(function(out)
     cb(out and vim.trim(out) or nil)
-  end
-  local cmd = config.options.cmd
-  if cmd then
-    backend.spawn(cmd, on)
-  else
-    backend.get(on)
-  end
+  end)
 end
 
 -- Kick off one asynchronous detection. Cheap to call; the actual statusline
 -- redraw only happens when the resolved label changes.
+--
+-- With no backend at all we leave M.state untouched rather than resolving to
+-- `unknown`, so a user with no tool installed keeps seeing `default` instead of
+-- a permanent "?".
 function M.refresh()
+  if not backend.available() then
+    return
+  end
   fetch(function(raw)
     M.raw = raw
     local label = resolve(raw)
@@ -116,8 +111,11 @@ function M.component()
   return config.options.format(M.get())
 end
 
+-- The timer starts even with no backend resolved yet: M.refresh() is a no-op
+-- until one appears, and polling is what lets a tool installed (or a PATH
+-- fixed) after startup start working without restarting Neovim.
 local function start_polling()
-  if timer or not available() then
+  if timer then
     return
   end
   timer = assert((vim.uv or vim.loop).new_timer())
@@ -149,12 +147,10 @@ function M.setup(opts)
   started = true
   config.setup(opts)
 
-  -- No backend available: stay silent (get() returns the default label, and
-  -- `:checkhealth ime-status` explains how to install a tool). Never error.
-  if not available() then
-    return M
-  end
-
+  -- Autocmds and the timer are registered unconditionally, even when no backend
+  -- can be found right now. Detection is resolved lazily per call and re-probed
+  -- periodically, so a missing tool means "silently does nothing for now"
+  -- rather than "permanently disabled for this session". Never error.
   local o = config.options
   M.refresh()
   start_polling()
@@ -222,6 +218,19 @@ function M.setup(opts)
       end
     end,
   })
+
+  -- Re-detect on demand, so installing the tool mid-session does not need a
+  -- restart to verify.
+  vim.api.nvim_create_user_command("IMEStatusReload", function()
+    backend.reload()
+    local cmd = backend.native() and { "native backend" } or backend.get_cmd()
+    vim.notify(
+      cmd and ("ime-status: using " .. table.concat(cmd, " "))
+        or "ime-status: no input-source tool found (see :checkhealth ime-status)",
+      cmd and vim.log.levels.INFO or vim.log.levels.WARN
+    )
+    M.refresh()
+  end, { desc = "Re-detect the ime-status input-source backend" })
 
   return M
 end

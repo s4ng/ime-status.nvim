@@ -89,7 +89,11 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 폴링 주기 (ms)
   insert_only = false,   -- 인서트 모드일 때만 폴링
-  cmd = nil,             -- 탐지 명령 직접 지정, 예: { "im-select" }
+  tool = nil,            -- 입력 소스 도구의 이름 또는 절대경로. 상태 읽기와 전환에 모두 사용.
+                         -- 예: "/opt/homebrew/bin/macism"
+  cmd = nil,             -- 저수준: 탐지 명령만 직접 지정
+  set_cmd = nil,         -- 저수준: 전환 명령만 직접 지정. 리스트를 주면 뒤에 대상 id가
+                         -- 붙고, function(id) -> { ... } 형태도 가능
   labels = {             -- 첫 번째로 매칭되는 규칙 적용 (대소문자 무시 부분 문자열)
     { match = "korean",   text = "한" },
     { match = "hangul",   text = "한" },
@@ -146,8 +150,18 @@ end
   `interval`을 낮추면 반응이 빠르지만 그만큼 서브프로세스가 자주 실행되고, 높이거나
   `insert_only = true`로 두면 비용이 줄어듭니다.
 - **도구가 설치되지 않았다면?** 플러그인은 우아하게 비활성화됩니다 — `get()`은
-  `default`를 반환하고 에러는 발생하지 않습니다. `:checkhealth ime-status`를
-  참고하세요.
+  `default`를 반환하고 에러는 발생하지 않습니다. 탐지는 사용 중에도 계속 재시도되므로
+  나중에 도구를 설치해도 Neovim을 재시작할 필요가 없고, 바로 확인하려면
+  `:IMEStatusReload`를 실행하세요. `:checkhealth ime-status`도 참고하세요.
+- **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?**
+  (macOS `.app` / Automator 액션, Neovide, `.desktop` 런처 등) 이런 방식은 셸 rc
+  파일을 읽지 않으므로 `PATH`에 `/opt/homebrew/bin` 같은 경로가 빠져 도구를 찾지
+  못합니다. `:echo $PATH`로 확인한 뒤, 런처의 환경을 고치거나 도구 경로를 직접
+  지정하세요:
+
+  ```lua
+  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  ```
 
 ## 라이선스
 

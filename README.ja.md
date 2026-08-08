@@ -89,7 +89,11 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- ポーリング間隔（ミリ秒）
   insert_only = false,   -- 挿入モードのときだけポーリング
-  cmd = nil,             -- 検出コマンドを上書き、例: { "im-select" }
+  tool = nil,            -- 入力ソースツールの名前または絶対パス。状態の取得と切り替えの
+                         -- 両方に使われる。例: "/opt/homebrew/bin/macism"
+  cmd = nil,             -- 低レベル: 検出コマンドだけを上書き
+  set_cmd = nil,         -- 低レベル: 切り替えコマンドだけを上書き。リストを渡すと末尾に
+                         -- 対象 id が追加される。function(id) -> { ... } も可
   labels = {             -- 最初にマッチしたルールを適用（大文字小文字を無視した部分一致）
     { match = "korean",   text = "한" },
     { match = "hangul",   text = "한" },
@@ -147,7 +151,18 @@ end
   即座に）サンプリングされます。`interval` を下げると反応が速くなりますが、その分
   サブプロセスの起動が増えます。上げるか `insert_only = true` にするとコストが減ります。
 - **ツールが未インストールなら?** プラグインは穏やかに無効化されます — `get()` は
-  `default` を返し、エラーは発生しません。`:checkhealth ime-status` を参照してください。
+  `default` を返し、エラーは発生しません。検出は作業中も再試行されるので、あとから
+  ツールをインストールしても Neovim の再起動は不要です。すぐ確認したい場合は
+  `:IMEStatusReload` を実行してください。`:checkhealth ime-status` も参照してください。
+- **ターミナルでは動くのに GUI から起動すると動かない?**
+  （macOS の `.app` / Automator アクション、Neovide、`.desktop` ランチャーなど）
+  これらはシェルの rc ファイルを読まないため、`PATH` から `/opt/homebrew/bin` などが
+  抜けてツールを見つけられません。`:echo $PATH` で確認し、ランチャー側の環境を直すか、
+  ツールのパスを直接指定してください:
+
+  ```lua
+  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  ```
 
 ## ライセンス
 
