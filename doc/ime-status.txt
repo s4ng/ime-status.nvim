@@ -22,17 +22,21 @@ merely exposes a fast getter.
 ==============================================================================
 2. REQUIREMENTS                                       *ime-status-requirements*
 
-Windows: nothing. The plugin talks to the IME directly through the built-in
-LuaJIT FFI (user32/imm32). Unlike im-select — which only reports the keyboard
-layout — this also detects the hangul/latin toggle inside a CJK IME.
-im-select.exe is used only as a fallback on Neovim builds without LuaJIT.
+macOS and Windows: nothing. The plugin talks to the IME directly through the
+built-in LuaJIT FFI.
 
-Other OSes need an external command that prints the current input source:
+  macOS    CoreFoundation + Carbon TIS. Same input-source ids macism prints,
+           without needing macism on PATH — which is what breaks when Neovim
+           is launched from a .app, Automator or Neovide, since those never
+           read your shell rc. macism/im-select are used only as a fallback on
+           Neovim builds without LuaJIT.
+  Windows  user32/imm32. Unlike im-select — which only reports the keyboard
+           layout — this also detects the hangul/latin toggle inside a CJK
+           IME. im-select.exe is a fallback for non-LuaJIT builds.
 
-  macOS    macism (https://github.com/laishulu/macism) or im-select
-  Linux    ibus or fcitx5-remote (experimental)
-
-The plugin does not install these. Run |:checkhealth| ime-status for guidance.
+Linux still needs an external command that prints the current input source:
+ibus or fcitx5-remote (experimental). The plugin does not install these. Run
+|:checkhealth| ime-status for guidance.
 
 ==============================================================================
 3. SETUP                                                     *ime-status-setup*
@@ -132,11 +136,12 @@ A `User IMEStatusChanged` autocmd fires whenever the cached label changes.
 
   :checkhealth ime-status
 
-Reports which backend is active (the native FFI backend on Windows, otherwise
-a supported input-source tool on the PATH), whether that tool can switch as
-well as report, and, when none is available, how to install one.
+Reports which backend is active (the native FFI backend on macOS and Windows,
+otherwise a supported input-source tool on the PATH), whether that tool can
+switch as well as report, and, when none is available, how to install one.
 
-If the tool works in a terminal but not here, the cause is almost always PATH:
+Only relevant when you pinned `tool`/`cmd`, or on a Neovim without LuaJIT: if
+the tool works in a terminal but not here, the cause is almost always PATH:
 Neovim launched from a GUI (a macOS .app or Automator action, Neovide, a
 .desktop launcher) does not read your shell rc files, so directories such as
 /opt/homebrew/bin are missing. Check `:echo $PATH`, then either fix the

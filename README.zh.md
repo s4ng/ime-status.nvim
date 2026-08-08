@@ -17,25 +17,23 @@ lualine 只是下面示例之一。
 
 ## 依赖
 
-**Windows 无需任何依赖**：插件通过内置的 LuaJIT FFI（user32/imm32）直接与 IME
-通信 —— 不需要外部工具，而且与 `im-select` 不同，它能检测中文/韩语/日语 IME
-**内部的中英文切换状态**。
-
-其他操作系统需要一个能输出当前输入源的外部工具。本插件**不会替你安装它**（Neovim
-插件管理器只管理 git 仓库，不管理系统二进制文件）。运行 `:checkhealth ime-status`
-会告诉你需要安装什么。
+**macOS 和 Windows 无需任何依赖**：插件通过内置的 LuaJIT FFI 直接与 IME 通信
+—— 不需要外部工具，无需安装，也不用在 `PATH` 里查找任何东西。
 
 | 操作系统 | 工具                                                                 |
 | -------- | -------------------------------------------------------------------- |
-| macOS    | [`macism`](https://github.com/laishulu/macism) 或 `im-select`        |
+| macOS    | 无需（内置 FFI 后端；仅无 LuaJIT 的构建需要 `macism`）               |
 | Windows  | 无需（内置 FFI 后端；仅无 LuaJIT 的构建需要 `im-select.exe`）        |
 | Linux    | `ibus` 或 `fcitx5-remote`（实验性 —— 可能需要自定义 `cmd`）          |
 
-```sh
-# macOS —— 必须使用完整的 tap 路径。直接 `brew install macism` 会失败
-#（macism 位于一个独立的 tap，而非 homebrew-core）。
-brew install laishulu/homebrew/macism
-```
+macOS 上直接调用 Carbon 的 TIS API —— 正是 `macism` 所封装的那套 API，因此输入源
+id 完全相同，但不再需要 Homebrew 安装，也不再有从 `.app` 或 Automator 动作启动
+Neovim 时找不到工具的 `PATH` 问题。Windows 上使用 user32/imm32，与 `im-select`
+不同，它能检测中文/韩语/日语 IME **内部的中英文切换状态**。
+
+Linux 仍然需要一个能输出当前输入源的外部工具。本插件**不会替你安装它**（Neovim
+插件管理器只管理 git 仓库，不管理系统二进制文件）。运行 `:checkhealth ime-status`
+会告诉你需要安装什么。
 
 ## 安装
 
@@ -148,9 +146,10 @@ end
   使用过程中持续重试，所以之后再安装工具也无需重启 Neovim；想立即验证可以运行
   `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
 - **在终端里正常，但从 GUI 启动 Neovim 就不行？**
-  （macOS 的 `.app` / Automator 动作、Neovide、`.desktop` 启动器等）它们不会读取
-  shell 的 rc 文件，因此 `PATH` 中缺少 `/opt/homebrew/bin` 之类的路径，找不到工具。
-  请用 `:echo $PATH` 确认，然后修复启动器的环境，或直接指定工具路径：
+  只有在 Linux 上，或你指定了 `tool`/`cmd` 从而关闭了 FFI 后端时才会发生。macOS
+  的 `.app` / Automator 动作、Neovide、`.desktop` 启动器等不会读取 shell 的 rc
+  文件，因此 `PATH` 中缺少 `/opt/homebrew/bin` 之类的路径，找不到工具。请用
+  `:echo $PATH` 确认，然后修复启动器的环境，或直接指定工具路径：
 
   ```lua
   require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })

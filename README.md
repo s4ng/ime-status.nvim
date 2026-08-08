@@ -20,25 +20,25 @@ below.
 
 ## Requirements
 
-**Windows needs nothing**: the plugin talks to the IME directly via the
-built-in LuaJIT FFI (user32/imm32) — no external tool, and unlike `im-select`
-it detects the hangul/latin toggle *inside* the Korean/Japanese/Chinese IME.
+**macOS and Windows need nothing**: the plugin talks to the IME directly via
+the built-in LuaJIT FFI — no external tool, nothing to install, and nothing to
+find on `PATH`.
 
-Other OSes need an external tool that reports the current input source. The
+| OS      | Tool                                                                    |
+| ------- | ----------------------------------------------------------------------- |
+| macOS   | none (built-in FFI backend; `macism` only for non-LuaJIT builds)        |
+| Windows | none (built-in FFI backend; `im-select.exe` only for non-LuaJIT builds) |
+| Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`)      |
+
+On macOS it calls Carbon's TIS API — the same thing `macism` wraps, so the same
+input-source ids, minus the Homebrew install and minus the `PATH` problem that
+breaks Neovim launched from a `.app` or an Automator action. On Windows it uses
+user32/imm32, and unlike `im-select` it detects the hangul/latin toggle *inside*
+the Korean/Japanese/Chinese IME.
+
+Linux still needs an external tool that reports the current input source. The
 plugin does **not** install it for you (Neovim plugin managers manage git
 repos, not system binaries) — run `:checkhealth ime-status` for guidance.
-
-| OS      | Tool                                                                 |
-| ------- | -------------------------------------------------------------------- |
-| macOS   | [`macism`](https://github.com/laishulu/macism) or `im-select`        |
-| Windows | none (built-in FFI backend; `im-select.exe` only for non-LuaJIT builds) |
-| Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`)   |
-
-```sh
-# macOS — use the full tap path. Plain `brew install macism` fails:
-# macism lives in a tap, not homebrew-core.
-brew install laishulu/homebrew/macism
-```
 
 ## Install
 
@@ -155,10 +155,11 @@ end
   installing the tool later starts working without restarting Neovim — or run
   `:IMEStatusReload` to re-detect right away. See `:checkhealth ime-status`.
 - **Works in a terminal but not when Neovim is launched from a GUI?**
-  (a macOS `.app` / Automator action, Neovide, a `.desktop` launcher …) Those do
-  not read your shell rc, so `/opt/homebrew/bin` and friends are missing from
-  `PATH` and the tool cannot be found. Check `:echo $PATH`, and either fix the
-  launcher's environment or pin the tool:
+  Only possible on Linux, or once you pin `tool`/`cmd` and opt out of the FFI
+  backend. A macOS `.app` / Automator action, Neovide or a `.desktop` launcher
+  does not read your shell rc, so `/opt/homebrew/bin` and friends are missing
+  from `PATH` and the tool cannot be found. Check `:echo $PATH`, and either fix
+  the launcher's environment or pin the tool:
 
   ```lua
   require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })

@@ -126,9 +126,10 @@ function M.reload()
   probed_at = nil
 end
 
--- The in-process backend for this OS, or nil. Currently Windows only: LuaJIT
--- FFI over user32/imm32, which needs no external tool and can see the
--- hangul/latin toggle inside a CJK IME (im-select cannot).
+-- The in-process backend for this OS, or nil. LuaJIT FFI over user32/imm32 on
+-- Windows (which also sees the hangul/latin toggle inside a CJK IME, invisible
+-- to im-select) and over CoreFoundation/TIS on macOS. Neither needs a tool on
+-- PATH — the failure mode of GUI-launched Neovim.
 ---@return table|nil
 function M.native()
   if explicit() then
@@ -136,10 +137,11 @@ function M.native()
   end
   if native_cache == nil then
     native_cache = false
-    if is_win then
-      local ok, win = pcall(require, "ime-status.ffi_win")
-      if ok and win.available() then
-        native_cache = win
+    local mod = (is_win and "ime-status.ffi_win") or (is_mac and "ime-status.ffi_mac") or nil
+    if mod then
+      local ok, native = pcall(require, mod)
+      if ok and native.available() then
+        native_cache = native
       end
     end
   end
