@@ -12,33 +12,37 @@ Show the current keyboard input method (한 / EN / あ / 中 …) in your Neovim
 statusline.
 
 Neovim itself has no idea which IME the OS is in — 한/영 switching is handled by
-the operating system, not the editor. This plugin asks a small external tool for
-the current input source, **caches** the result, refreshes it asynchronously on
-a timer and on mode changes, and exposes a fast getter you can drop into any
+the operating system, not the editor. This plugin reads the current input source
+straight from the OS, **caches** the result, refreshes it asynchronously on a
+timer and on mode changes, and exposes a fast getter you can drop into any
 statusline. It is **not** lualine-specific; lualine is just one of the examples
 below.
 
 ## Requirements
 
-**macOS and Windows need nothing**: the plugin talks to the IME directly via
-the built-in LuaJIT FFI — no external tool, nothing to install, and nothing to
+Just Neovim. On macOS and Windows the plugin queries the IME in-process through
+the built-in LuaJIT FFI — there is no companion binary to install and nothing to
 find on `PATH`.
 
-| OS      | Tool                                                                    |
-| ------- | ----------------------------------------------------------------------- |
-| macOS   | none (built-in FFI backend; `macism` only for non-LuaJIT builds)        |
-| Windows | none (built-in FFI backend; `im-select.exe` only for non-LuaJIT builds) |
-| Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`)      |
+| OS      | What to install                                                    |
+| ------- | ------------------------------------------------------------------ |
+| macOS   | nothing — built-in FFI backend (Carbon TIS)                        |
+| Windows | nothing — built-in FFI backend (user32/imm32)                      |
+| Linux   | `ibus` or `fcitx5-remote` (experimental — may need a custom `cmd`) |
 
-On macOS it calls Carbon's TIS API — the same thing `macism` wraps, so the same
-input-source ids, minus the Homebrew install and minus the `PATH` problem that
-breaks Neovim launched from a `.app` or an Automator action. On Windows it uses
-user32/imm32, and unlike `im-select` it detects the hangul/latin toggle *inside*
-the Korean/Japanese/Chinese IME.
+The macOS backend calls Carbon's TIS API, so input-source ids read exactly as
+they do system-wide. The Windows backend goes through user32/imm32, which also
+sees the hangul/latin toggle *inside* the Korean/Japanese/Chinese IME — state a
+layout-reporting tool like `im-select` cannot report at all.
 
-Linux still needs an external tool that reports the current input source. The
-plugin does **not** install it for you (Neovim plugin managers manage git
-repos, not system binaries) — run `:checkhealth ime-status` for guidance.
+**Linux is the one exception.** There is no OS-level API to call: the input
+method owns the state and only exposes it through its own CLI, so the plugin has
+to run `ibus` or `fcitx5-remote` — whichever ships with yours. It does **not**
+install that for you (Neovim plugin managers manage git repos, not system
+binaries) — run `:checkhealth ime-status` for guidance.
+
+> Neovim built against plain Lua rather than LuaJIT has no FFI. There the plugin
+> falls back to `macism` / `im-select.exe` if one happens to be on `PATH`.
 
 ## Install
 
@@ -89,8 +93,9 @@ Defaults:
 require("ime-status").setup({
   interval = 300,        -- polling interval (ms)
   insert_only = false,   -- only poll while in insert mode
-  tool = nil,            -- name or absolute path of the input-source tool, used for
-                         -- both reading and switching, e.g. "/opt/homebrew/bin/macism"
+  tool = nil,            -- Linux, or to opt out of the native backend: name or absolute
+                         -- path of the input-source tool, used for both reading and
+                         -- switching, e.g. "/usr/bin/fcitx5-remote"
   cmd = nil,             -- low-level: override only the detection command
   set_cmd = nil,         -- low-level: override only the switch command; a list gets
                          -- the target id appended, or pass function(id) -> { ... }
@@ -148,21 +153,23 @@ end
 
 - **Polling is necessary.** In a terminal there is no event for "the OS just
   switched IME", so the state is sampled every `interval` ms (plus immediately on
-  mode change). Lower `interval` = snappier but more subprocess spawns; raise it,
-  or set `insert_only = true`, to reduce cost.
-- **No tool installed?** The plugin degrades gracefully: `get()` returns
-  `default` and nothing errors. Detection is retried while you work, so
+  mode change). On macOS and Windows a sample is an in-process FFI call, so the
+  default 300 ms costs approximately nothing. On Linux each sample spawns
+  `ibus`/`fcitx5-remote`, so raise `interval` or set `insert_only = true` if that
+  shows up.
+- **Linux without one of the tools?** The plugin degrades gracefully: `get()`
+  returns `default` and nothing errors. Detection is retried while you work, so
   installing the tool later starts working without restarting Neovim — or run
   `:IMEStatusReload` to re-detect right away. See `:checkhealth ime-status`.
-- **Works in a terminal but not when Neovim is launched from a GUI?**
-  Only possible on Linux, or once you pin `tool`/`cmd` and opt out of the FFI
-  backend. A macOS `.app` / Automator action, Neovide or a `.desktop` launcher
-  does not read your shell rc, so `/opt/homebrew/bin` and friends are missing
-  from `PATH` and the tool cannot be found. Check `:echo $PATH`, and either fix
-  the launcher's environment or pin the tool:
+- **Works in a terminal but not when Neovim is launched from a GUI?** A Linux
+  concern — or a macOS/Windows one only if you pinned `tool`/`cmd` and opted out
+  of the native backend. A `.desktop` launcher, Neovide or a macOS `.app` does
+  not read your shell rc, so the tool is missing from `PATH` and cannot be found.
+  Check `:echo $PATH`, and either fix the launcher's environment or pin an
+  absolute path:
 
   ```lua
-  require("ime-status").setup({ tool = "/opt/homebrew/bin/macism" })
+  require("ime-status").setup({ tool = "/usr/bin/fcitx5-remote" })
   ```
 
 ## License
