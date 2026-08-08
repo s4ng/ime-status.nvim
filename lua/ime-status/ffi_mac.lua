@@ -111,6 +111,13 @@ function M.get()
   return id
 end
 
+-- Unverified in a foreground session: switching *to* an IME works, but
+-- switching from an active CJK IME back to a keyboard layout has been seen to
+-- return noErr and do nothing when called from a non-foreground process.
+-- macism behaves identically there, so this is platform behaviour rather than
+-- an FFI artefact — but if auto_switch ever fails to leave Korean/Japanese, the
+-- per-application input source setting (System Settings → Keyboard →
+-- "Automatically switch to a document's input source") is the first suspect.
 ---@param id string
 ---@return boolean
 function M.set(id)

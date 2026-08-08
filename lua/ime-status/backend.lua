@@ -195,6 +195,13 @@ end
 -- auto_switch when the user did not set `latin_source`. Returns nil on Windows
 -- without the FFI backend because im-select expects a locale id (e.g. "1033")
 -- that varies per machine.
+--
+-- The macOS id is a guess, not a lookup: on Dvorak, Colemak or a national latin
+-- layout this rewrites the layout on every InsertLeave, and if ABC is not among
+-- the *enabled* sources the switch simply fails. Set `latin_source` to work
+-- around it. The real fix is to remember the last non-CJK source seen and return
+-- to that — the inverse of `saved_source` in init.lua — which is cheap now that
+-- the FFI backend makes reading the current source free.
 ---@return string|nil
 function M.default_latin()
   if is_mac then
