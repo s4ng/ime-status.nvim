@@ -24,19 +24,25 @@ IME —— 没有需要一并安装的二进制文件，也不用在 `PATH` 里�
 | -------- | -------------------------------------------------------------------- |
 | macOS    | 无 —— 内置 FFI 后端（Carbon TIS）                                    |
 | Windows  | 无 —— 内置 FFI 后端（user32/imm32）                                  |
-| Linux    | `ibus` 或 `fcitx5-remote`（实验性 —— 可能需要自定义 `cmd`）          |
+| Linux    | fcitx5 无需安装 —— 内置 D-Bus 后端；ibus 需要 `ibus` CLI             |
 
 macOS 后端调用 Carbon 的 TIS API，因此读到的输入源 id 与系统全局使用的完全一致。
 Windows 后端走 user32/imm32，这也让中文/韩语/日语 IME **内部的中英文切换状态**变得
 可见 —— 这是 `im-select` 这类只查询键盘布局的工具根本无法得知的状态。
 
-**Linux 是唯一的例外。** 那里没有可调用的系统级 API，输入法只通过自己的 CLI 暴露
-状态，所以插件只能去执行 `ibus` 或 `fcitx5-remote`（取决于你用的是哪个输入法）。
-本插件**不会替你安装它**（Neovim 插件管理器只管理 git 仓库，不管理系统二进制
-文件）。运行 `:checkhealth ime-status` 会告诉你需要安装什么。
+**Linux 没有可调用的系统级 API。** 状态归输入法所有，且只通过它自己的 IPC 暴露。
+fcitx5 在会话总线上应答，因此插件直接用 D-Bus 与它对话 —— 不用 FFI，纯 Lua 操作
+套接字，发起与 `fcitx5-remote -n` 完全相同的
+`org.fcitx.Fcitx.Controller1.CurrentInputMethod` 调用，既不创建进程也不查 `PATH`。
 
-> 用纯 Lua 而非 LuaJIT 构建的 Neovim 没有 FFI。此时若 `PATH` 中存在
-> `macism` / `im-select.exe`，插件会回退到它们。
+ibus 仍然走 `ibus` CLI：它位于**私有总线**上，而且 `GetGlobalEngine` 返回的是序列化
+的引擎描述符而非名字。这里有两点要注意：插件**不会替你安装**该 CLI（插件管理器只
+管理 git 仓库），而且 ibus 根本不暴露输入法**内部**的中英文切换状态 —— 使用该切换
+时标签会保持不变。请把切换键配置为切换 ibus **引擎**，或者改用 fcitx5。运行
+`:checkhealth ime-status` 会说明当前情况。
+
+> 用纯 Lua 而非 LuaJIT 构建的 Neovim 没有 FFI。此时 macOS/Windows 后端会在 `PATH`
+> 中存在 `macism` / `im-select.exe` 时回退到它们。Linux 后端不使用 FFI，不受影响。
 
 ## 安装
 
@@ -86,8 +92,8 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 轮询间隔（毫秒）
   insert_only = false,   -- 仅在插入模式下轮询
-  tool = nil,            -- 用于 Linux，或用于关闭原生后端：输入源工具的名称或绝对路径，
-                         -- 读取状态和切换都会使用，例如 "/usr/bin/fcitx5-remote"
+  tool = nil,            -- 用于 ibus，或用于关闭原生后端：输入源工具的名称或绝对路径，
+                         -- 读取状态和切换都会使用，例如 "/usr/bin/ibus"
   cmd = nil,             -- 底层：仅覆盖检测命令
   set_cmd = nil,         -- 底层：仅覆盖切换命令。传列表时会在末尾追加目标 id，
                          -- 也可以传 function(id) -> { ... }
@@ -125,8 +131,9 @@ require("ime-status").setup({
 ```
 
 - `latin_source` 默认为操作系统的拉丁键盘布局（macOS `com.apple.keylayout.ABC`，
-  Linux ibus `xkb:us::eng`，Windows `"en"` —— FFI 后端在不改变键盘布局的情况下
-  仅将 IME 切换到英文模式）。
+  Linux 在 fcitx5 上是 `keyboard-us`、在 ibus 上是 `xkb:us::eng`，Windows `"en"` ——
+  FFI 后端在不改变键盘布局的情况下仅将 IME 切换到英文模式）。Linux 的两套 id 并不通用，
+  因此默认值取决于实际应答的后端。
 - `restore_on_insert` 会记住插入期间使用的 IME，并在下一次 `InsertEnter` 时恢复 ——
   对需要输入 CJK 的缓冲区很方便。
 - `pause_on_focus_lost = true` 会在 Neovim 失去焦点时停止轮询定时器（在 `FocusGained`
@@ -144,21 +151,30 @@ end
 
 - **轮询是必要的。** 在终端环境中没有“操作系统刚刚切换了 IME”这样的事件，因此状态会
   每隔 `interval`（毫秒）采样一次（并在模式切换时立即采样）。在 macOS 和 Windows 上，
-  一次采样就是一次进程内的 FFI 调用，所以默认的 300 ms 几乎没有开销。在 Linux 上每次
-  采样都会启动 `ibus`/`fcitx5-remote`，若觉得有负担，可调高 `interval` 或设置
-  `insert_only = true`。
-- **Linux 上没有安装工具？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。
-  检测会在使用过程中持续重试，所以之后再安装工具也无需重启 Neovim；想立即验证可以
-  运行 `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
-- **在终端里正常，但从 GUI 启动 Neovim 就不行？** 这是 Linux 上的问题；在
+  一次采样就是一次进程内的 FFI 调用，所以默认的 300 ms 几乎没有开销；fcitx5 也是如此
+  —— 只是在已经打开的套接字上往返一次。只有 ibus 路径每次采样都会启动进程，若觉得有
+  负担，可在那里调高 `interval` 或设置 `insert_only = true`。
+- **Linux 上没有运行输入法？** 插件会优雅地停用 —— `get()` 返回 `default`，不会报错。
+  检测会在使用过程中持续重试，所以之后再启动 fcitx5 或安装 `ibus` CLI 也无需重启
+  Neovim；想立即验证可以运行 `:IMEStatusReload`。另请参阅 `:checkhealth ime-status`。
+- **用 fcitx5 却一直显示 `?`？** fcitx5 返回的是**当前获得焦点的客户端**所用的
+  输入法，因此没有任何窗口获得焦点时它会返回空名字，标签退回 `unknown`。Neovim 在
+  后台时这是正常的（`pause_on_focus_lost = true` 会直接停止轮询）。若始终只有 `?`，
+  多半是你的终端并非 fcitx5 客户端 —— 检查 `GTK_IM_MODULE` / `QT_IM_MODULE` /
+  `XMODIFIERS`，或用 `unknown = ""` 隐藏它。
+- **在终端里正常，但从 GUI 启动 Neovim 就不行？** 这是 ibus 上的问题；在
   macOS/Windows 上只有当你指定了 `tool`/`cmd` 从而关闭原生后端时才会出现。
   `.desktop` 启动器、Neovide、macOS 的 `.app` 等不会读取 shell 的 rc 文件，因此在
   `PATH` 中找不到工具。请用 `:echo $PATH` 确认，然后修复启动器的环境，或直接指定
   绝对路径：
 
   ```lua
-  require("ime-status").setup({ tool = "/usr/bin/fcitx5-remote" })
+  require("ime-status").setup({ tool = "/usr/bin/ibus" })
   ```
+
+  fcitx5 不受影响：D-Bus 后端读取的是 `$DBUS_SESSION_BUS_ADDRESS`（缺失时回退到
+  `/run/user/<uid>/bus`），而不是 `PATH`。若该变量在 Neovim 内为空，
+  `:checkhealth ime-status` 会指出来。
 
 ## 许可证
 
