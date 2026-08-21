@@ -26,22 +26,30 @@ Neovim だけです。macOS と Windows では内蔵の LuaJIT FFI を通じて�
 | ------- | -------------------------------------------------------------------- |
 | macOS   | なし — 内蔵 FFI バックエンド（Carbon TIS）                            |
 | Windows | なし — 内蔵 FFI バックエンド（user32/imm32）                          |
-| Linux   | `ibus` または `fcitx5-remote`（実験的 — `cmd` の指定が必要な場合あり） |
+| Linux   | fcitx5 は不要 — 内蔵 D-Bus バックエンド / ibus は `ibus` CLI が必要   |
 
 macOS のバックエンドは Carbon の TIS API を呼ぶため、入力ソース id はシステム全体で
 使われる値とまったく同じです。Windows のバックエンドは user32/imm32 を経由し、その
 おかげで日本語/韓国語/中国語 IME **内部のかな/英数トグル状態**まで見えます —
 `im-select` のようなレイアウト照会ツールでは原理的に分からない状態です。
 
-**Linux だけが例外です。** 呼び出せる OS レベルの API がなく、入力メソッドが状態を
-自身の CLI 経由でしか公開していないため、プラグインは `ibus` か `fcitx5-remote`
-（お使いの入力メソッドに付属する方）を実行するほかありません。それを**代わりに
-インストールはしません**（Neovim のプラグインマネージャは git リポジトリのみを管理し、
-システムバイナリは管理しません）。`:checkhealth ime-status` を実行すると、何を
-インストールすべきか教えてくれます。
+**Linux には呼び出せる OS レベルの API がありません。** 状態を持っているのは入力
+メソッドで、公開経路はその IPC だけだからです。fcitx5 はセッションバスで応答するため、
+プラグインは D-Bus で直接話します — FFI なしの素の Lua でソケットを扱い、
+`fcitx5-remote -n` と同じ `org.fcitx.Fcitx.Controller1.CurrentInputMethod` を、
+プロセス起動も `PATH` 探索もなしに呼びます。
 
-> LuaJIT ではなく素の Lua でビルドされた Neovim には FFI がありません。その場合は
-> `macism` / `im-select.exe` が `PATH` にあればそちらにフォールバックします。
+ibus は今も `ibus` CLI 経由です。**プライベートバス**上にあり、`GetGlobalEngine` が
+名前ではなくシリアライズされたエンジン記述子を返すためです。注意点が二つあります。
+プラグインはその CLI を**代わりにインストールしません**（プラグインマネージャは git
+リポジトリのみを管理します）。そして ibus は **ibus-hangul 内部のかな/英数に相当する
+トグルを一切公開しません** — そのトグルを使うとラベルは固定されたままになります。
+切り替えキーを ibus の**エンジン切り替え**に設定するか、fcitx5 を使ってください。
+`:checkhealth ime-status` が状況を教えてくれます。
+
+> LuaJIT ではなく素の Lua でビルドされた Neovim には FFI がありません。その場合、
+> macOS/Windows のバックエンドは `macism` / `im-select.exe` が `PATH` にあれば
+> フォールバックします。Linux バックエンドは FFI を使わないため影響を受けません。
 
 ## インストール
 
@@ -92,9 +100,9 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- ポーリング間隔（ミリ秒）
   insert_only = false,   -- 挿入モードのときだけポーリング
-  tool = nil,            -- Linux 用、またはネイティブバックエンドを無効にする場合: 入力
+  tool = nil,            -- ibus 用、またはネイティブバックエンドを無効にする場合: 入力
                          -- ソースツールの名前または絶対パス。状態の取得と切り替えの
-                         -- 両方に使われる。例: "/usr/bin/fcitx5-remote"
+                         -- 両方に使われる。例: "/usr/bin/ibus"
   cmd = nil,             -- 低レベル: 検出コマンドだけを上書き
   set_cmd = nil,         -- 低レベル: 切り替えコマンドだけを上書き。リストを渡すと末尾に
                          -- 対象 id が追加される。function(id) -> { ... } も可
@@ -133,8 +141,9 @@ require("ime-status").setup({
 ```
 
 - `latin_source` のデフォルトは OS のラテン配列です（macOS `com.apple.keylayout.ABC`、
-  Linux ibus `xkb:us::eng`、Windows `"en"` — FFI バックエンドはキーボード配列を
-  変えずに IME だけを英数モードへ切り替えます）。
+  Linux は fcitx5 なら `keyboard-us`、ibus なら `xkb:us::eng`、Windows `"en"` — FFI
+  バックエンドはキーボード配列を変えずに IME だけを英数モードへ切り替えます）。Linux の
+  二つの id 体系は互換ではないため、実際に応答するバックエンドに合わせて決まります。
 - `restore_on_insert` は挿入中に使っていた IME を記憶し、次の `InsertEnter` で
   復元します — CJK を入力するバッファに便利です。
 - `pause_on_focus_lost = true` は Neovim が非フォーカスの間ポーリングタイマーを
@@ -153,22 +162,34 @@ end
 - **ポーリングは避けられません。** ターミナル環境には「OS がたった今 IME を切り替えた」
   というイベントがないため、状態は `interval`（ミリ秒）ごとに（さらにモード変更時には
   即座に）サンプリングされます。macOS と Windows では 1 回のサンプリングがプロセス内の
-  FFI 呼び出しなので、デフォルトの 300 ms でもコストはほぼゼロです。Linux では
-  サンプリングのたびに `ibus`/`fcitx5-remote` が起動するため、気になる場合は
-  `interval` を上げるか `insert_only = true` にしてください。
-- **Linux でツールが未インストールなら?** プラグインは穏やかに無効化されます — `get()`
-  は `default` を返し、エラーは発生しません。検出は作業中も再試行されるので、あとから
-  ツールをインストールしても Neovim の再起動は不要です。すぐ確認したい場合は
-  `:IMEStatusReload` を実行してください。`:checkhealth ime-status` も参照してください。
-- **ターミナルでは動くのに GUI から起動すると動かない?** Linux で起こる問題で、
+  FFI 呼び出しなので、デフォルトの 300 ms でもコストはほぼゼロです。fcitx5 も同様で、
+  すでに開いているソケットの往復にすぎません。プロセスが起動するのは ibus 経路だけなので、
+  気になる場合はそこで `interval` を上げるか `insert_only = true` にしてください。
+- **Linux で入力メソッドが動いていない場合は?** プラグインは穏やかに無効化されます —
+  `get()` は `default` を返し、エラーは発生しません。検出は作業中も再試行されるので、
+  あとから fcitx5 を起動しても `ibus` CLI を入れても Neovim の再起動は不要です。すぐ
+  確認したい場合は `:IMEStatusReload` を実行してください。`:checkhealth ime-status` も
+  参照してください。
+- **fcitx5 なのにラベルが `?` のままなら?** fcitx5 は**フォーカスされている
+  クライアント**の入力メソッドを返すため、どこにもフォーカスがないと空の名前を
+  返し、ラベルは `unknown` に落ちます。Neovim が背面にあるときは正常で、
+  `pause_on_focus_lost = true` ならポーリング自体が止まります。ずっと `?` のままなら、
+  お使いのターミナルが fcitx5 クライアントでない可能性が高いです —
+  `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` を確認するか、`unknown = ""` で
+  隠してください。
+- **ターミナルでは動くのに GUI から起動すると動かない?** ibus で起こる問題で、
   macOS/Windows では `tool`/`cmd` を指定してネイティブバックエンドを無効にした場合
   のみ該当します。`.desktop` ランチャー、Neovide、macOS の `.app` などはシェルの rc
   ファイルを読まないため、`PATH` からツールを見つけられません。`:echo $PATH` で
   確認し、ランチャー側の環境を直すか、絶対パスを直接指定してください:
 
   ```lua
-  require("ime-status").setup({ tool = "/usr/bin/fcitx5-remote" })
+  require("ime-status").setup({ tool = "/usr/bin/ibus" })
   ```
+
+  fcitx5 では起こりません。D-Bus バックエンドが見るのは `PATH` ではなく
+  `$DBUS_SESSION_BUS_ADDRESS`（無ければ `/run/user/<uid>/bus`）です。Neovim 内でその
+  変数が空なら `:checkhealth ime-status` が指摘します。
 
 ## ライセンス
 

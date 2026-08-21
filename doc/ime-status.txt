@@ -32,14 +32,28 @@ to find on PATH.
            IME — state a tool that only reports the keyboard layout cannot
            report at all.
 
-Linux is the one exception. There is no OS-level API to call: the input
-method owns the state and only exposes it through its own CLI, so the plugin
-has to run ibus or fcitx5-remote (experimental), whichever ships with yours.
-The plugin does not install these. Run |:checkhealth| ime-status for
-guidance.
+Linux has no OS-level API to call: the input method owns the state and only
+exposes it over its own IPC.
+
+  fcitx5   Answered in-process too, but over D-Bus rather than FFI: plain
+           Lua on a session-bus socket, making the same
+           org.fcitx.Fcitx.Controller1.CurrentInputMethod call that
+           fcitx5-remote -n makes. Nothing to install, and PATH is never
+           consulted — only $DBUS_SESSION_BUS_ADDRESS, falling back to
+           /run/user/<uid>/bus.
+  ibus     Still driven through the `ibus` CLI, which the plugin does not
+           install: ibus lives on a private bus and answers GetGlobalEngine
+           with a serialised engine descriptor rather than a name.
+
+Note for ibus users: ibus does not expose the hangul/latin toggle inside
+ibus-hangul at all, so with that toggle the label stays on 한. Configure the
+한/영 key to switch ibus *engines* instead, or use fcitx5.
+
+Run |:checkhealth| ime-status for guidance.
 
 Neovim built against plain Lua rather than LuaJIT has no FFI. There the
-plugin falls back to macism / im-select.exe if one happens to be on PATH.
+macOS and Windows backends fall back to macism / im-select.exe if one
+happens to be on PATH; the Linux backend uses no FFI and is unaffected.
 
 ==============================================================================
 3. SETUP                                                     *ime-status-setup*
@@ -60,9 +74,9 @@ insert_only  (boolean, default false)
              Only poll while in insert mode.
 
 tool         (string|nil, default nil)
-             For Linux, or to opt out of the native backend: name or absolute
+             For ibus, or to opt out of the native backend: name or absolute
              path of the input-source tool, used for both reading the current
-             source and switching it, e.g. "/usr/bin/fcitx5-remote". When nil
+             source and switching it, e.g. "/usr/bin/ibus". When nil
              the tool is auto-detected on the PATH for the current OS. Set
              this when Neovim is launched from a GUI and cannot see your shell
              PATH (see |ime-status-health|).
@@ -98,9 +112,11 @@ auto_switch  (boolean, default false)
 
 latin_source (string|nil, default nil)
              Input-source id auto_switch switches to. nil = OS default
-             (macOS com.apple.keylayout.ABC, Linux ibus xkb:us::eng,
-             Windows "en" — the FFI backend flips the IME to latin mode
-             without changing the keyboard layout).
+             (macOS com.apple.keylayout.ABC, Linux keyboard-us on fcitx5
+             or xkb:us::eng on ibus, Windows "en" — the FFI backend flips
+             the IME to latin mode without changing the keyboard layout).
+             The two Linux vocabularies are not interchangeable, so the
+             default follows whichever backend answers.
 
 restore_on_insert  (boolean, default false)
              On InsertEnter, restore the IME that was active before the last
@@ -141,11 +157,19 @@ A `User IMEStatusChanged` autocmd fires whenever the cached label changes.
   :checkhealth ime-status
 
 Reports which backend is active (the native FFI backend on macOS and Windows,
-otherwise a supported input-source tool on the PATH), whether that tool can
-switch as well as report, and, when none is available, how to install one.
+the native D-Bus backend when fcitx5 answers on the session bus, otherwise a
+supported input-source tool on the PATH), whether that tool can switch as well
+as report, and, when none is available, how to install one.
 
-The PATH caveat below applies on Linux — and on macOS/Windows only once you
-pinned `tool`/`cmd` or run a Neovim without LuaJIT. If the tool works in a
+fcitx5 reports the input method of the *focused* client, so with nothing
+focused it answers with an empty name and the label falls back to `unknown`
+("?"). That is expected while Neovim is in the background. A label that never
+becomes anything else usually means the terminal is not a fcitx5 client --
+check GTK_IM_MODULE / QT_IM_MODULE / XMODIFIERS.
+
+The PATH caveat below applies to ibus — and on macOS/Windows only once you
+pinned `tool`/`cmd` or run a Neovim without LuaJIT. It never applies to the
+fcitx5 backend, which reads the bus address, not PATH. If the tool works in a
 terminal but not here, the cause is almost always PATH: Neovim launched from
 a GUI (a .desktop launcher, Neovide, a macOS .app or Automator action) does
 not read your shell rc files, so directories such as /usr/local/bin are
