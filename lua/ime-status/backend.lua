@@ -38,7 +38,14 @@ else
   }
 end
 
--- Resolved in-process (FFI) backend module, or false once probing failed.
+-- The in-process backend module for this OS, once required; false when there
+-- is none. Held separately from `native_cache` because a module can exist but
+-- not be usable yet -- the Linux one finishes its D-Bus handshake a few
+-- milliseconds after the first poll asks for it.
+---@type table|false|nil
+local native_mod
+
+-- The in-process backend once it reported itself usable, or false/nil before.
 ---@type table|false|nil
 local native_cache
 
@@ -123,6 +130,12 @@ end
 -- Drop every cached probe result so the next call re-detects. Backs
 -- `:IMEStatusReload`.
 function M.reload()
+  -- A backend holding a connection (Linux/D-Bus) gets to drop it too, so
+  -- reload really means "start over" and not just "forget which one you were".
+  if native_mod and native_mod.reload then
+    native_mod.reload()
+  end
+  native_mod = nil
   native_cache = nil
   tool_cache = nil
   probed_at = nil
@@ -130,22 +143,30 @@ end
 
 -- The in-process backend for this OS, or nil. LuaJIT FFI over user32/imm32 on
 -- Windows (which also sees the hangul/latin toggle inside a CJK IME, invisible
--- to im-select) and over CoreFoundation/TIS on macOS. Neither needs a tool on
--- PATH — the failure mode of GUI-launched Neovim.
+-- to im-select), over CoreFoundation/TIS on macOS, and plain Lua D-Bus to
+-- fcitx5 on Linux. None of them needs a tool on PATH — the failure mode of
+-- GUI-launched Neovim.
 ---@return table|nil
 function M.native()
   if explicit() then
     return nil
   end
-  if native_cache == nil then
-    native_cache = false
-    local mod = (is_win and "ime-status.ffi_win") or (is_mac and "ime-status.ffi_mac") or nil
-    if mod then
-      local ok, native = pcall(require, mod)
-      if ok and native.available() then
-        native_cache = native
-      end
-    end
+  if native_mod == nil then
+    local mod = (is_win and "ime-status.ffi_win")
+      or (is_mac and "ime-status.ffi_mac")
+      or "ime-status.dbus_linux"
+    local ok, native = pcall(require, mod)
+    native_mod = ok and native or false
+  end
+  if native_cache then
+    return native_cache
+  end
+  -- available() reads cached state on every backend, so asking again each poll
+  -- is free — and it is what lets the Linux one, which connects and shakes
+  -- hands asynchronously, take over a few milliseconds in. The FFI backends
+  -- decide once at load and never change their answer.
+  if native_mod and native_mod.available() then
+    native_cache = native_mod
   end
   return native_cache or nil
 end
@@ -213,6 +234,17 @@ function M.default_latin()
     -- conversion mode, keeping the layout); im-select has no such id.
     return M.native() and "en" or nil
   end
+  -- The two Linux input methods do not share an id vocabulary: fcitx5 calls
+  -- its latin input method "keyboard-us", ibus calls the same thing
+  -- "xkb:us::eng", and handing one the other's id is a silent no-op. So pick
+  -- by whoever is actually going to answer.
+  if M.native() then
+    return "keyboard-us" -- the native backend only ever speaks to fcitx5
+  end
+  local t = tool()
+  if t and t.exe:find("fcitx5", 1, true) then
+    return "keyboard-us"
+  end
   return "xkb:us::eng"
 end
 
@@ -264,7 +296,14 @@ end
 function M.get(cb)
   local native = M.native()
   if native then
-    cb(native.get())
+    if native.get_async then
+      -- An async native (Linux/D-Bus) may answer later, or — for a transient
+      -- miss like a reply still in flight — not at all, which reads as "no
+      -- change" rather than a blink to `unknown`.
+      native.get_async(cb)
+    else
+      cb(native.get())
+    end
     return
   end
   local cmd = M.get_cmd()
@@ -282,9 +321,13 @@ end
 function M.set(id, cb)
   local native = M.native()
   if native then
-    native.set(id)
-    if cb then
-      cb()
+    if native.set_async then
+      native.set_async(id, cb)
+    else
+      native.set(id)
+      if cb then
+        cb()
+      end
     end
     return
   end
