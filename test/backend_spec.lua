@@ -68,7 +68,30 @@ if is_mac or is_win then
     assert(native.set("com.example.no.such.source") == false, "set() of an unknown id must return false")
   end
 else
-  assert(backend.native() == nil, "no native backend expected on this OS")
+  -- Linux resolves a native backend only when fcitx5 answers on the session
+  -- bus, and it does so asynchronously — so both outcomes are legitimate here
+  -- and what matters is that each one is coherent.
+  vim.wait(500, function()
+    return backend.native() ~= nil
+  end, 20)
+  local native = backend.native()
+  if native then
+    assert(type(native.get_async) == "function", "the Linux backend must be the async kind")
+    local raw, answered
+    native.get_async(function(v)
+      raw, answered = v, true
+    end)
+    assert(vim.wait(2000, function()
+      return answered
+    end, 20), "get_async never answered although fcitx5 is on the bus")
+    assert(type(raw) == "string" and raw ~= "", "native get_async returned " .. vim.inspect(raw))
+    -- fcitx5 ids, unlike ibus ones, are bare names: "hangul", "keyboard-us".
+    eq(backend.default_latin(), "keyboard-us", "fcitx5 latin id")
+  else
+    -- No fcitx5 on the bus: detection has to fall through to the external
+    -- tool, and availability must say exactly that.
+    eq(backend.available(), backend.get_cmd() ~= nil, "without a native backend the tool decides")
+  end
 end
 
 print("ok")
