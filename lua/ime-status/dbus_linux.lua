@@ -529,6 +529,36 @@ function M.reload()
   reset(0)
 end
 
+-- Why the native backend is not serving, for :checkhealth. Separates the four
+-- cases that look identical from the outside -- the label just never changes --
+-- but need opposite fixes.
+---@return "ready"|"no_bus"|"stale_bus"|"unreachable"|"no_fcitx5"
+function M.diagnose()
+  if conn.state == "ready" then
+    return "ready"
+  end
+  local path, abstract = bus_path()
+  if not path then
+    return "no_bus"
+  end
+  -- An abstract address is named by a leading NUL, so connecting to it needs
+  -- uv_pipe_connect2 (luv 1.46 / Neovim 0.10). Older builds can *find* the bus
+  -- and still never reach it: the one case where the external tool is not a
+  -- workaround but the only way in.
+  if abstract and not uv.pipe_connect2 then
+    return "unreachable"
+  end
+  -- The variable outliving the daemon is the normal state of a WSL shell, a
+  -- bare TTY or a container: the address is inherited but nothing is listening.
+  -- Indistinguishable from "fcitx5 is not running" at the socket, and the two
+  -- send the user to opposite fixes, so separate them here. (Only the env-var
+  -- path can be stale; bus_path() already stat()s the systemd fallback.)
+  if not abstract and not uv.fs_stat(path) then
+    return "stale_bus"
+  end
+  return "no_fcitx5"
+end
+
 -- Exposed for test/dbus_spec.lua: the codec is the half that can be checked
 -- without a running bus.
 M._codec = {
