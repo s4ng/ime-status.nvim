@@ -44,13 +44,25 @@ local BUS_PATH = "/org/freedesktop/DBus"
 local BUS_IFACE = "org.freedesktop.DBus"
 
 local LE = string.byte("l") -- the byte order we announce, and therefore encode
-local MSG_CALL, MSG_RETURN = 1, 2
+local MSG_CALL, MSG_RETURN, MSG_SIGNAL = 1, 2, 4
 -- Header field codes (D-Bus spec 4.1): only the ones we send or read.
 local F_PATH, F_IFACE, F_MEMBER, F_ERROR, F_REPLY_SERIAL, F_DEST, F_SIG = 1, 2, 3, 4, 5, 6, 8
 -- fcitx5 ships a D-Bus activation file, so an ordinary method call would
 -- *start* an input method just because a statusline polled. NO_AUTO_START
 -- turns that into an error reply, which is what we actually want to hear.
 local NO_AUTO_START = 0x02
+
+-- Ask the bus to forward just the one signal we care about: fcitx5 gaining or
+-- losing its name. arg0 narrows it to that name, so the daemon filters for us
+-- and a busy session bus costs us nothing.
+local MATCH_FCITX_OWNER = table.concat({
+  "type='signal'",
+  "sender='" .. BUS_NAME .. "'",
+  "path='" .. BUS_PATH .. "'",
+  "interface='" .. BUS_IFACE .. "'",
+  "member='NameOwnerChanged'",
+  "arg0='" .. FCITX_NAME .. "'",
+}, ",")
 
 -- A reply that never comes must not pin a callback forever; 1s is far beyond
 -- any local round trip (sub-millisecond) yet short enough to recover within a
@@ -240,6 +252,10 @@ local function decode(msg)
       v, i = get_str(msg, i, le)
       if code == F_ERROR then
         m.error = v
+      elseif code == F_MEMBER then
+        m.member = v
+      elseif code == F_IFACE then
+        m.iface = v
       end
     elseif sig == "g" then
       local _
@@ -262,7 +278,14 @@ end
 -- ------------------------------------------------------------------ transport
 
 local conn = {
-  state = "idle", -- idle | connecting | ready
+  -- idle       nothing open; ensure() may dial once retry_at has passed
+  -- connecting socket open, handshake in flight
+  -- waiting    connected and subscribed, but fcitx5 does not own its name.
+  --            A definite answer, not a transient one: we sit on the open
+  --            socket and let NameOwnerChanged tell us when that changes,
+  --            instead of re-dialling and re-handshaking every RETRY_MS.
+  -- ready      fcitx5 is there and answering
+  state = "idle",
   pipe = nil,
   buf = "",
   auth = true, -- still in the text (SASL) phase
@@ -272,7 +295,7 @@ local conn = {
   retry_at = 0,
 }
 
-local ensure, hello
+local ensure, hello, on_signal
 
 -- The session bus socket. DBUS_SESSION_BUS_ADDRESS is authoritative and may
 -- list several addresses; the systemd default is the fallback for shells that
@@ -392,11 +415,30 @@ local function on_read(err, chunk)
     end
     local msg = decode(conn.buf:sub(1, total))
     conn.buf = conn.buf:sub(total + 1)
-    -- Anything without a reply serial is a broadcast signal we never asked for.
-    if msg and msg.reply_serial then
-      finish(msg.reply_serial, msg.type == MSG_RETURN and msg or nil)
+    if msg then
+      if msg.reply_serial then
+        finish(msg.reply_serial, msg.type == MSG_RETURN and msg or nil)
+      elseif msg.type == MSG_SIGNAL then
+        on_signal(msg)
+      end
     end
   end
+end
+
+-- The one signal we subscribed to: fcitx5 appearing on or leaving the bus.
+--
+-- NameOwnerChanged(name, old_owner, new_owner), and the match rule pins arg0 to
+-- fcitx5's name, so only the new owner matters -- empty means it just left.
+-- This is what turns "start fcitx5 and wait up to RETRY_MS for a re-probe" into
+-- "start fcitx5 and the next redraw has it".
+function on_signal(m)
+  if m.iface ~= BUS_IFACE or m.member ~= "NameOwnerChanged" then
+    return
+  end
+  local _, i = get_str(m.body, 1, m.le) -- name, already known from arg0
+  local _, j = get_str(m.body, i, m.le) -- previous owner, not ours to care about
+  local new_owner = get_str(m.body, j, m.le)
+  conn.state = (new_owner and new_owner ~= "") and "ready" or "waiting"
 end
 
 -- Register with the bus, then decide whether this backend can serve at all.
@@ -405,16 +447,20 @@ function hello()
     if not m then
       return reset(RETRY_MS)
     end
-    -- Ask the bus who owns the name rather than calling fcitx5 to see what
-    -- happens: it is one round trip, it cannot auto-start an input method, and
-    -- a "no" here is what lets backend.lua fall back to the ibus CLI.
-    call(BUS_NAME, BUS_PATH, BUS_IFACE, "NameHasOwner", { FCITX_NAME }, function(r)
-      -- BOOLEAN travels as a u32.
-      if r and get_u32(r.body, 1, r.le) == 1 then
-        conn.state = "ready"
-      else
-        reset(RETRY_MS)
+    -- Subscribe *before* probing. The other order has a hole: fcitx5 starting
+    -- between the probe and the subscription is missed entirely, and nothing
+    -- would ever come along to correct it.
+    call(BUS_NAME, BUS_PATH, BUS_IFACE, "AddMatch", { MATCH_FCITX_OWNER }, function(added)
+      if not added then
+        return reset(RETRY_MS)
       end
+      -- Ask the bus who owns the name rather than calling fcitx5 to see what
+      -- happens: it is one round trip, it cannot auto-start an input method, and
+      -- a "no" here is what lets backend.lua fall back to the ibus CLI.
+      call(BUS_NAME, BUS_PATH, BUS_IFACE, "NameHasOwner", { FCITX_NAME }, function(r)
+        -- BOOLEAN travels as a u32.
+        conn.state = (r and get_u32(r.body, 1, r.le) == 1) and "ready" or "waiting"
+      end)
     end)
   end)
 end
@@ -489,6 +535,13 @@ end
 -- timeout) do answer nil.
 ---@param cb fun(raw:string|nil)
 function M.get_async(cb)
+  if conn.state == "waiting" then
+    -- Connected, and the bus says fcitx5 is not here. That is an answer, not a
+    -- transient miss, so give it: otherwise a fcitx5 that exits mid-session
+    -- leaves the label frozen on whatever it last reported.
+    cb(nil)
+    return
+  end
   if conn.state ~= "ready" then
     ensure()
     return
