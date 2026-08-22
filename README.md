@@ -20,55 +20,17 @@ below.
 
 ## Requirements
 
-Just Neovim. On every supported OS the plugin reads the IME in-process — through
-the built-in LuaJIT FFI on macOS and Windows, and by speaking D-Bus to the input
-method daemon on Linux. There is no companion binary to install and nothing to
-find on `PATH`.
+**Just Neovim.** No companion binary to install, nothing to find on `PATH` — the
+plugin reads the input method in-process on every supported OS.
 
-| OS      | What to install                                                    |
-| ------- | ------------------------------------------------------------------ |
-| macOS   | nothing — built-in FFI backend (Carbon TIS)                        |
-| Windows | nothing — built-in FFI backend (user32/imm32)                      |
-| Linux   | nothing — built-in D-Bus backend (fcitx5 and ibus)                 |
+| OS      | How it reads the IME                                          |
+| ------- | ------------------------------------------------------------- |
+| macOS   | Carbon TIS, through the built-in LuaJIT FFI                   |
+| Windows | user32/imm32, through the built-in LuaJIT FFI                 |
+| Linux   | D-Bus, straight to fcitx5 or ibus — plain Lua, no FFI         |
 
-The macOS backend calls Carbon's TIS API, so input-source ids read exactly as
-they do system-wide. The Windows backend goes through user32/imm32, which also
-sees the hangul/latin toggle *inside* the Korean/Japanese/Chinese IME — state a
-layout-reporting tool like `im-select` cannot report at all.
-
-**Linux has no OS-level API to call** — the input method owns the state and only
-exposes it over its own IPC. Both of the daemons people actually run speak
-D-Bus, so the plugin speaks it back, in plain Lua over a socket. No FFI, no
-process spawn, no `PATH` lookup.
-
-They do not share a bus: fcitx5 answers on the session bus, while ibus runs a
-private one and writes its address to `~/.config/ibus/bus/`. The plugin holds a
-connection to each and uses whichever daemon is running, so a machine with
-neither never opens a socket at all, and one where you start or stop a daemon
-mid-session follows along.
-
-The two are not symmetrical, and that is what `interval` actually costs:
-
-- **fcitx5** declares no signal for "the current input method changed" — its
-  `Controller1` has exactly one signal and it is about input-method *groups* —
-  so it is polled. A sample is one `CurrentInputMethod` round trip on a socket
-  that is already open: the same call `fcitx5-remote -n` makes, without the
-  spawn.
-- **ibus** emits `GlobalEngineChanged` on every switch, so it is not polled at
-  all. The plugin subscribes once, and a sample becomes a read of a value the
-  daemon already pushed.
-
-Both connections also watch `NameOwnerChanged`, so starting or stopping a daemon
-shows up on the next redraw instead of after a retry timer.
-
-> One ibus caveat no amount of D-Bus fixes: ibus does not expose the
-> hangul/latin toggle *inside* ibus-hangul, so if you switch with that toggle
-> the label stays on `한`. Configure the 한/영 key to switch ibus *engines*
-> instead, or use fcitx5. Run `:checkhealth ime-status` for guidance.
-
-> Neovim built against plain Lua rather than LuaJIT has no FFI. There the macOS
-> and Windows backends fall back to `macism` / `im-select.exe` if one happens to
-> be on `PATH`. The Linux backend uses no FFI and is unaffected.
+See [**doc/backends.md**](doc/backends.md) for what each backend actually does,
+what a poll costs on it, and the caveats that belong to each input method.
 
 ## Install
 
