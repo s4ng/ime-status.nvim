@@ -84,7 +84,13 @@ else
     assert(vim.wait(2000, function()
       return answered
     end, 20), "get_async never answered although fcitx5 is on the bus")
-    assert(type(raw) == "string" and raw ~= "", "native get_async returned " .. vim.inspect(raw))
+    -- A string, but not necessarily a non-empty one: fcitx5 answers
+    -- CurrentInputMethod with "" whenever no input context has focus, which is
+    -- the normal state on a headless box (and, in a terminal, whenever the
+    -- terminal itself is unfocused). init.lua renders that as `unknown`, so an
+    -- empty answer is a documented outcome rather than a protocol failure --
+    -- observed against fcitx5 5.1.12 on WSL Debian.
+    assert(type(raw) == "string", "native get_async returned " .. vim.inspect(raw))
     -- fcitx5 ids, unlike ibus ones, are bare names: "hangul", "keyboard-us".
     eq(backend.default_latin(), "keyboard-us", "fcitx5 latin id")
   else
