@@ -33,17 +33,23 @@ to find on PATH.
            report at all.
 
 Linux has no OS-level API to call: the input method owns the state and only
-exposes it over its own IPC.
+exposes it over its own IPC. Both daemons people actually run speak D-Bus, so
+the plugin speaks it back — plain Lua on a socket, no FFI, nothing to install
+and no PATH lookup. They do not share a bus, so the plugin holds a connection
+to each and uses whichever daemon is running.
 
-  fcitx5   Answered in-process too, but over D-Bus rather than FFI: plain
-           Lua on a session-bus socket, making the same
-           org.fcitx.Fcitx.Controller1.CurrentInputMethod call that
-           fcitx5-remote -n makes. Nothing to install, and PATH is never
-           consulted — only $DBUS_SESSION_BUS_ADDRESS, falling back to
-           /run/user/<uid>/bus.
-  ibus     Still driven through the `ibus` CLI, which the plugin does not
-           install: ibus lives on a private bus and answers GetGlobalEngine
-           with a serialised engine descriptor rather than a name.
+  fcitx5   Session bus, at $DBUS_SESSION_BUS_ADDRESS (falling back to
+           /run/user/<uid>/bus). Declares no signal for "the current input
+           method changed", so it is polled: one
+           org.fcitx.Fcitx.Controller1.CurrentInputMethod round trip on an
+           already-open socket, the same call fcitx5-remote -n makes.
+  ibus     A private bus, at $IBUS_ADDRESS (falling back to the address file
+           ibus writes under ~/.config/ibus/bus/). Emits GlobalEngineChanged
+           on every switch, so it is not polled at all: the plugin subscribes
+           once and a sample reads a value the daemon already pushed.
+
+Both connections also watch NameOwnerChanged, so starting or stopping a
+daemon is picked up on the next redraw rather than after a retry timer.
 
 Note for ibus users: ibus does not expose the hangul/latin toggle inside
 ibus-hangul at all, so with that toggle the label stays on 한. Configure the
@@ -74,12 +80,11 @@ insert_only  (boolean, default false)
              Only poll while in insert mode.
 
 tool         (string|nil, default nil)
-             For ibus, or to opt out of the native backend: name or absolute
-             path of the input-source tool, used for both reading the current
-             source and switching it, e.g. "/usr/bin/ibus". When nil
-             the tool is auto-detected on the PATH for the current OS. Set
-             this when Neovim is launched from a GUI and cannot see your shell
-             PATH (see |ime-status-health|).
+             Opt out of the native backend: name or absolute path of an
+             external tool, used for both reading the current source and
+             switching it, e.g. "/usr/bin/ibus". When nil the tool is
+             auto-detected on the PATH for the current OS, and is only
+             consulted at all when no native backend is available.
 
 cmd          (string[]|nil, default nil)
              Low-level override of the *detection* command only, e.g.
@@ -94,7 +99,15 @@ set_cmd      (string[]|fun(id):string[]|nil, default nil)
 labels       (list, default 한/あ/中 rules)
              Ordered { match = <pattern>, text = <label> } rules. `match` is a
              case-insensitive substring tested against the raw backend id; the
-             first match wins.
+             first match wins. Supplying this replaces the default list
+             wholesale rather than merging into it.
+
+             Most default rules match *engine* names, not language names,
+             because that is what the backends report: on Linux the raw id is
+             whatever the input method calls itself, and no Japanese engine
+             (anthy, mozc, kkc, skk) has "japanese" in its name. If an engine
+             shows as `default` while it is active, check the id it reports
+             with :lua print(require("ime-status").raw) and add a rule.
 
 default      (string, default "EN")
              Label shown when no rule matches.
@@ -157,9 +170,18 @@ A `User IMEStatusChanged` autocmd fires whenever the cached label changes.
   :checkhealth ime-status
 
 Reports which backend is active (the native FFI backend on macOS and Windows,
-the native D-Bus backend when fcitx5 answers on the session bus, otherwise a
+the native D-Bus backend on Linux and which daemon answered, otherwise a
 supported input-source tool on the PATH), whether that tool can switch as well
 as report, and, when none is available, how to install one.
+
+On Linux it also says, per daemon, why the D-Bus path is not being used when
+it is not: no bus address, an address naming a socket that is not there (the
+normal state in WSL, a bare TTY or a container, where the variable outlived
+the daemon it pointed at), an abstract socket this Neovim is too old to
+connect to (luv 1.46+ / Neovim 0.10+ is needed for those), or a reachable bus
+with no daemon on it. Those four need four different fixes, which is why no
+single minimum Neovim version is documented: which build you need depends on
+your bus address, not on your OS.
 
 fcitx5 reports the input method of the *focused* client, so with nothing
 focused it answers with an empty name and the label falls back to `unknown`
@@ -167,9 +189,9 @@ focused it answers with an empty name and the label falls back to `unknown`
 becomes anything else usually means the terminal is not a fcitx5 client --
 check GTK_IM_MODULE / QT_IM_MODULE / XMODIFIERS.
 
-The PATH caveat below applies to ibus — and on macOS/Windows only once you
-pinned `tool`/`cmd` or run a Neovim without LuaJIT. It never applies to the
-fcitx5 backend, which reads the bus address, not PATH. If the tool works in a
+The PATH caveat below applies only once you pinned `tool`/`cmd` or run a
+Neovim without LuaJIT. It never applies to the native backends: the Linux one
+reads bus addresses, not PATH. If the tool works in a
 terminal but not here, the cause is almost always PATH: Neovim launched from
 a GUI (a .desktop launcher, Neovide, a macOS .app or Automator action) does
 not read your shell rc files, so directories such as /usr/local/bin are
