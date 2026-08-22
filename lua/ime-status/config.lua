@@ -26,14 +26,47 @@ M.defaults = {
   tool = nil,
   cmd = nil,
   set_cmd = nil,
-  -- Matched in order against the lower-cased raw id reported by the backend.
-  -- Covers the common identifiers across macism / im-select / ibus / fcitx5.
+  -- Matched in order against the lower-cased raw id reported by the backend;
+  -- first match wins, anything unmatched falls through to `default`.
+  --
+  -- Most of these are engine names rather than language names, because that is
+  -- what the backends actually report. Only macOS and the Windows FFI backend
+  -- name the language: on Linux the id is whatever the input method calls
+  -- itself, and not one Japanese engine -- anthy, mozc, kkc, skk -- has
+  -- "japanese" anywhere in it. Matching on language alone silently labelled
+  -- every one of them `EN`, which is worse than `unknown`: it states, with
+  -- confidence, that you are in latin mode while you are not.
+  --
+  -- Verified against ibus 1.5.32 and fcitx5 5.1.12 (see test/label_spec.lua).
+  -- Deliberately absent: `rime`, which is a schema engine used for Chinese,
+  -- Japanese and Korean alike, so its name says nothing about the language.
   labels = {
     { match = "korean", text = "한" },
     { match = "hangul", text = "한" },
-    { match = "japanese", text = "あ" },
-    { match = "pinyin", text = "中" },
+
+    { match = "japanese", text = "あ" }, -- macOS: ...RomajiTyping.Japanese
+    { match = "kotoeri", text = "あ" },
+    { match = "anthy", text = "あ" },
+    { match = "mozc", text = "あ" },
+    { match = "kkc", text = "あ" },
+    { match = "skk", text = "あ" },
+
     { match = "chinese", text = "中" },
+    { match = "pinyin", text = "中" }, -- also libpinyin, sunpinyin
+    { match = "shuangpin", text = "中" },
+    { match = "bopomofo", text = "中" },
+    { match = "zhuyin", text = "中" },
+    { match = "cangjie", text = "中" },
+    { match = "chewing", text = "中" },
+    { match = "wubi", text = "中" },
+    { match = "wbpy", text = "中" },
+    { match = "wbx", text = "中" },
+    { match = "erbi", text = "中" },
+    -- macOS names these after the mode, not the language: SCIM = simplified,
+    -- TCIM = traditional. com.apple.inputmethod.SCIM.ITABC is the default
+    -- simplified-Chinese input method and matches nothing else here.
+    { match = "scim", text = "中" },
+    { match = "tcim", text = "中" },
   },
   default = "EN",
   unknown = "?",
