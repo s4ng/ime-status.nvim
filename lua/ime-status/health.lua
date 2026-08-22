@@ -7,46 +7,69 @@ local function luv_version()
   return uv.version_string and uv.version_string() or "unknown"
 end
 
--- Linux only: why the in-process D-Bus backend is not serving. Worth saying
--- even when a tool *was* found, because "input-source tool found" otherwise
--- reads like a clean bill of health while quietly hiding that the cheaper path
--- was skipped -- and the reasons it gets skipped need different fixes.
+-- Where each of the two Linux daemons stands. Reported per provider because
+-- they live on different buses and fail for unrelated reasons -- and reported
+-- even when an external tool *was* found, because "input-source tool found"
+-- otherwise reads like a clean bill of health while quietly hiding that the
+-- cheaper path was skipped.
 --
--- No version requirement is documented for the plugin on purpose: the D-Bus
--- backend degrades to the tool on its own, and which Neovim a given user needs
--- depends on their bus address, not on their OS. Saying it here says it
--- accurately, per machine, instead of approximately in four READMEs.
+-- No minimum Neovim version is documented for the plugin on purpose: the D-Bus
+-- backends degrade to the tool on their own, and which build a given user needs
+-- depends on their bus address, not on their OS -- an abstract socket needs
+-- 0.10, the systemd default does not, and ibus 1.5.32 no longer uses one.
+-- Saying it here says it accurately, per machine, instead of approximately in
+-- four READMEs.
+local PROVIDERS = {
+  {
+    id = "fcitx5",
+    unreachable = "the session bus is on an abstract socket",
+    stale = "$DBUS_SESSION_BUS_ADDRESS names a socket that is not there — the session bus is not running",
+    stale_advice = {
+      "normal in WSL, a bare TTY or a container: the variable outlived the daemon it pointed at",
+      "check :echo $DBUS_SESSION_BUS_ADDRESS against ls -l on that path",
+    },
+    none = "no session bus found — $DBUS_SESSION_BUS_ADDRESS is unset here and /run/user/<uid>/bus does not exist",
+    absent = "fcitx5 is not on the session bus — not running, or started against another bus",
+  },
+  {
+    id = "ibus",
+    unreachable = "the private bus ibus runs is on an abstract socket",
+    stale = "ibus left an address behind but nothing is listening on it — the daemon is not running",
+    stale_advice = { "a daemon that exited leaves its file in ~/.config/ibus/bus/ with a dead address" },
+    none = "no ibus address — $IBUS_ADDRESS is unset and ~/.config/ibus/bus/ has no live entry",
+    absent = "the bus ibus runs is reachable but nothing owns org.freedesktop.IBus",
+  },
+}
+
 local function linux_native_note(h)
   local o = require("ime-status.config").options
   if o.tool or o.cmd or o.set_cmd then
-    h.info("native D-Bus backend disabled by opts.tool / opts.cmd / opts.set_cmd — unset them to use it")
+    h.info("native D-Bus backends disabled by opts.tool / opts.cmd / opts.set_cmd — unset them to use one")
     return
   end
 
   local ok, dbus = pcall(require, "ime-status.dbus_linux")
-  local why = ok and dbus.diagnose() or "no_bus"
+  if not ok then
+    h.info("the D-Bus backend module failed to load")
+    return
+  end
 
-  if why == "unreachable" then
-    h.warn(
-      "the session bus is on an abstract socket, which needs luv 1.46+ (Neovim 0.10+) — this build has luv "
-        .. luv_version(),
-      {
-        "fcitx5 may well be running: this Neovim just cannot open that kind of socket",
+  for _, p in ipairs(PROVIDERS) do
+    local why = dbus.diagnose(p.id)
+    if why == "unreachable" then
+      -- The one case where the external tool is not a workaround but the only
+      -- way in, so it gets a warning rather than a note.
+      h.warn(p.unreachable .. ", which needs luv 1.46+ (Neovim 0.10+) — this build has luv " .. luv_version(), {
+        p.id .. " may well be running: this Neovim just cannot open that kind of socket",
         "upgrade Neovim to drop the external tool, or keep using the tool reported below",
-      }
-    )
-  elseif why == "stale_bus" then
-    h.warn("$DBUS_SESSION_BUS_ADDRESS names a socket that is not there — the session bus is not running", {
-      "normal in WSL, a bare TTY or a container: the variable outlived the daemon it pointed at",
-      "check :echo $DBUS_SESSION_BUS_ADDRESS against ls -l on that path",
-    })
-  elseif why == "no_bus" then
-    h.info(
-      "no session bus found — $DBUS_SESSION_BUS_ADDRESS is unset here and /run/user/<uid>/bus does not exist "
-        .. "(check :echo $DBUS_SESSION_BUS_ADDRESS)"
-    )
-  else
-    h.info("fcitx5 does not own org.fcitx.Fcitx5 on the session bus — not running, or started against another bus")
+      })
+    elseif why == "stale_bus" then
+      h.warn(p.stale, p.stale_advice)
+    elseif why == "no_bus" then
+      h.info(p.none)
+    else
+      h.info(p.absent)
+    end
   end
 end
 
@@ -87,8 +110,16 @@ function M.check()
       h.ok("native Windows backend active (LuaJIT FFI, user32/imm32) — no external tool needed")
       h.info("detects the hangul/latin toggle inside the IME; im-select on PATH is ignored")
     else
-      h.ok("native Linux backend active (D-Bus to fcitx5, no FFI) — no external tool needed")
-      h.info("reads the same names fcitx5-remote -n prints; fcitx5-remote on PATH is ignored")
+      local loaded, dbus = pcall(require, "ime-status.dbus_linux")
+      local who = (loaded and dbus.provider()) or "an input method"
+      h.ok(("native Linux backend active (D-Bus to %s, no FFI) — no external tool needed"):format(who))
+      if who == "ibus" then
+        -- Worth calling out: ibus pushes every change, so on this path
+        -- `interval` stops costing a round trip at all.
+        h.info("subscribed to GlobalEngineChanged — the poll reads a cache, it does not ask the daemon")
+      else
+        h.info("reads the same names fcitx5-remote -n prints; fcitx5-remote on PATH is ignored")
+      end
     end
     return
   end
@@ -132,8 +163,8 @@ function M.check()
   else
     -- The note above already said why D-Bus is out; this is only about the
     -- fallback being missing too.
-    h.error("no D-Bus path to fcitx5 (see above) and no input-source tool on PATH", {
-      "ibus users: ibus lives on a private bus, so it still needs its CLI on PATH — " .. path_hint,
+    h.error("no D-Bus path to fcitx5 or ibus (see above) and no input-source tool on PATH", {
+      path_hint,
       "otherwise: install ibus or fcitx5",
     })
   end

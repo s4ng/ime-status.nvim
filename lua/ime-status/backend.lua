@@ -238,8 +238,11 @@ function M.default_latin()
   -- its latin input method "keyboard-us", ibus calls the same thing
   -- "xkb:us::eng", and handing one the other's id is a silent no-op. So pick
   -- by whoever is actually going to answer.
-  if M.native() then
-    return "keyboard-us" -- the native backend only ever speaks to fcitx5
+  -- The native backend now speaks to whichever daemon it found, so it names
+  -- its own id rather than being assumed to mean fcitx5.
+  local native = M.native()
+  if native then
+    return (native.latin and native.latin()) or "keyboard-us"
   end
   local t = tool()
   if t and t.exe:find("fcitx5", 1, true) then

@@ -179,4 +179,44 @@ do
   vim.env.DBUS_SESSION_BUS_ADDRESS = saved
 end
 
+-- ------------------------------------------------------------ ibus GetGlobalEngine
+
+-- What ibus 1.5.32 really answered GetGlobalEngine with, hangul selected. The
+-- payload is a VARIANT holding an IBusEngineDesc: signature
+-- (sa{sv}ssssssssusssssss), then "IBusEngineDesc", then an empty a{sv}, then
+-- the engine name. Getting to the third field means skipping a dict, and the
+-- only reason that is cheap is that a D-Bus array is prefixed with the byte
+-- length of its contents -- so it can be stepped over without being read.
+local REPLY_GLOBALENGINE = unhex("6c0201011d010000040000004000000007017300140000006f72672e667265656465736b746f702e4442757300000000"
+  .. "06017300040000003a312e380000000008016700017600000501750004000000192873617b73767d7373737373737373"
+  .. "757373737373737373290000000000000e00000049427573456e67696e65446573630000000000000600000068616e67"
+  .. "756c00000600000048616e67756c0000130000004b6f7265616e20496e707574204d6574686f6400020000006b6f0000"
+  .. "0300000047504c002400000050656e67204875616e67203c736861776e2e702e6875616e6740676d61696c2e636f6d3e"
+  .. "000000000b000000696275732d68616e67756c00020000006b72000063000000000000000000000003000000ed959c00"
+  .. "1e0000002f7573722f6c6962657865632f696275732d73657475702d68616e67756c0000050000006b72313034000000"
+  .. "0000000000000000000000000000000000000000000000000000")
+
+-- And what it answers when nothing is selected yet, which a freshly started
+-- daemon does: an ERROR, not a malformed reply. Ordinary, not a fault.
+local REPLY_NOENGINE = unhex("6c03010116000000040000007000000007017300140000006f72672e667265656465736b746f702e4442757300000000"
+  .. "04017300210000006f72672e667265656465736b746f702e444275732e4572726f722e4661696c656400000000000000"
+  .. "06017300040000003a312e340000000008016700017300000501750004000000110000004e6f20676c6f62616c20656e"
+  .. "67696e652e00")
+
+do
+  local m = assert(c.decode(REPLY_GLOBALENGINE))
+  eq(m.type, 2, "GetGlobalEngine reply is a METHOD_RETURN")
+  eq(m.reply_serial, 4, "GetGlobalEngine reply serial")
+  eq(c.ibus_engine_name(m.body, m.le), "hangul", "engine name out of the IBusEngineDesc variant")
+
+  local e = assert(c.decode(REPLY_NOENGINE))
+  eq(e.type, 3, "the no-engine answer is an ERROR")
+  eq(e.error, "org.freedesktop.DBus.Error.Failed", "error name")
+  -- The transport hands anything that is not a METHOD_RETURN to the caller as
+  -- nil, so this never reaches the decoder above; asserting the shape here is
+  -- what keeps that assumption honest.
+  assert(e.type ~= 2, "an ERROR must not be mistaken for a reply")
+end
+
+
 print("ok")
