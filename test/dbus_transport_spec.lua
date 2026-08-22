@@ -140,7 +140,18 @@ end)
 -- ------------------------------------------------------------------- the run
 
 local saved = vim.env.DBUS_SESSION_BUS_ADDRESS
+local saved_ibus, saved_xdg = vim.env.IBUS_ADDRESS, vim.env.XDG_CONFIG_HOME
 vim.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=" .. sock
+
+-- The backend keeps a second connection for ibus, and on a machine that is
+-- actually running ibus it would find it and answer from there -- making
+-- available() true without a single byte crossing the fake bus below, and the
+-- frame counts meaningless. Point it at nothing so this spec measures only what
+-- it set up.
+vim.env.IBUS_ADDRESS = nil
+local empty = vim.fn.tempname()
+vim.fn.mkdir(empty, "p")
+vim.env.XDG_CONFIG_HOME = empty
 
 assert(dbus.available() == false, "available() must not claim readiness before the handshake")
 
@@ -208,6 +219,7 @@ dbus.reload()
 assert(dbus.available() == false, "reload() must put the backend back to unconnected")
 
 vim.env.DBUS_SESSION_BUS_ADDRESS = saved
+vim.env.IBUS_ADDRESS, vim.env.XDG_CONFIG_HOME = saved_ibus, saved_xdg
 server:close()
 if not is_win then
   os.remove(sock)

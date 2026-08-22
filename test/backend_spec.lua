@@ -68,9 +68,9 @@ if is_mac or is_win then
     assert(native.set("com.example.no.such.source") == false, "set() of an unknown id must return false")
   end
 else
-  -- Linux resolves a native backend only when fcitx5 answers on the session
-  -- bus, and it does so asynchronously — so both outcomes are legitimate here
-  -- and what matters is that each one is coherent.
+  -- Linux resolves a native backend only when fcitx5 or ibus answers, and it
+  -- does so asynchronously — so every outcome below is legitimate depending on
+  -- what happens to be running, and what matters is that each one is coherent.
   vim.wait(500, function()
     return backend.native() ~= nil
   end, 20)
@@ -83,18 +83,23 @@ else
     end)
     assert(vim.wait(2000, function()
       return answered
-    end, 20), "get_async never answered although fcitx5 is on the bus")
-    -- A string, but not necessarily a non-empty one: fcitx5 answers
+    end, 20), "get_async never answered although a daemon is on the bus")
+    -- A string or nil, and an empty string is not a failure: fcitx5 answers
     -- CurrentInputMethod with "" whenever no input context has focus, which is
     -- the normal state on a headless box (and, in a terminal, whenever the
-    -- terminal itself is unfocused). init.lua renders that as `unknown`, so an
-    -- empty answer is a documented outcome rather than a protocol failure --
-    -- observed against fcitx5 5.1.12 on WSL Debian.
-    assert(type(raw) == "string", "native get_async returned " .. vim.inspect(raw))
-    -- fcitx5 ids, unlike ibus ones, are bare names: "hangul", "keyboard-us".
-    eq(backend.default_latin(), "keyboard-us", "fcitx5 latin id")
+    -- terminal itself is unfocused); ibus answers nil until it has an engine.
+    -- init.lua renders both as `unknown` -- documented outcomes, not protocol
+    -- failures. Observed against fcitx5 5.1.12 and ibus 1.5.32 on WSL Debian.
+    assert(raw == nil or type(raw) == "string", "native get_async returned " .. vim.inspect(raw))
+
+    -- The two daemons do not share an id vocabulary, and handing one the
+    -- other's latin id is a silent no-op -- so the id has to follow whichever
+    -- one actually answered, not a guess baked in at load.
+    local want = ({ fcitx5 = "keyboard-us", ibus = "xkb:us::eng" })[native.provider()]
+    assert(want, "unexpected provider " .. vim.inspect(native.provider()))
+    eq(backend.default_latin(), want, native.provider() .. " latin id")
   else
-    -- No fcitx5 on the bus: detection has to fall through to the external
+    -- Neither daemon reachable: detection has to fall through to the external
     -- tool, and availability must say exactly that.
     eq(backend.available(), backend.get_cmd() ~= nil, "without a native backend the tool decides")
   end

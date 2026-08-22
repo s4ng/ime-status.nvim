@@ -20,12 +20,15 @@
 -- asynchronous, which is why this module exposes get_async/set_async rather
 -- than get/set.
 --
--- Scope: fcitx5 only. ibus lives on a *private* bus whose address has to be
--- dug out of ~/.config/ibus/bus/<machine-id>-<host>-<display>, usually on an
--- abstract socket, and answers GetGlobalEngine with a serialised
--- IBusEngineDesc struct instead of a plain string. ibus users keep the
--- external `ibus` CLI, which backend.lua still resolves whenever available()
--- here says no.
+-- Covers both Linux input methods, which do not share a bus: fcitx5 answers on
+-- the session bus, ibus runs a *private* one whose address has to be found
+-- first. So there are two connections here, and whichever daemon is actually
+-- running wins; a machine with neither never dials at all.
+--
+-- The two are not symmetrical. fcitx5 declares no signal for "the current input
+-- method changed", so it is polled -- cheaply, over a socket that is already
+-- open. ibus emits GlobalEngineChanged on every switch, so it is not polled at
+-- all: the value is pushed and a poll is a table read.
 
 local M = {}
 
@@ -39,6 +42,10 @@ local FCITX_NAME = "org.fcitx.Fcitx5"
 local FCITX_PATH = "/controller"
 local FCITX_IFACE = "org.fcitx.Fcitx.Controller1"
 
+local IBUS_NAME = "org.freedesktop.IBus"
+local IBUS_PATH = "/org/freedesktop/IBus"
+local IBUS_IFACE = "org.freedesktop.IBus"
+
 local BUS_NAME = "org.freedesktop.DBus"
 local BUS_PATH = "/org/freedesktop/DBus"
 local BUS_IFACE = "org.freedesktop.DBus"
@@ -51,18 +58,6 @@ local F_PATH, F_IFACE, F_MEMBER, F_ERROR, F_REPLY_SERIAL, F_DEST, F_SIG = 1, 2, 
 -- *start* an input method just because a statusline polled. NO_AUTO_START
 -- turns that into an error reply, which is what we actually want to hear.
 local NO_AUTO_START = 0x02
-
--- Ask the bus to forward just the one signal we care about: fcitx5 gaining or
--- losing its name. arg0 narrows it to that name, so the daemon filters for us
--- and a busy session bus costs us nothing.
-local MATCH_FCITX_OWNER = table.concat({
-  "type='signal'",
-  "sender='" .. BUS_NAME .. "'",
-  "path='" .. BUS_PATH .. "'",
-  "interface='" .. BUS_IFACE .. "'",
-  "member='NameOwnerChanged'",
-  "arg0='" .. FCITX_NAME .. "'",
-}, ",")
 
 -- A reply that never comes must not pin a callback forever; 1s is far beyond
 -- any local round trip (sub-millisecond) yet short enough to recover within a
@@ -275,48 +270,39 @@ local function decode(msg)
   return m
 end
 
--- ------------------------------------------------------------------ transport
+-- ------------------------------------------------------------ address lookup
 
-local conn = {
-  -- idle       nothing open; ensure() may dial once retry_at has passed
-  -- connecting socket open, handshake in flight
-  -- waiting    connected and subscribed, but fcitx5 does not own its name.
-  --            A definite answer, not a transient one: we sit on the open
-  --            socket and let NameOwnerChanged tell us when that changes,
-  --            instead of re-dialling and re-handshaking every RETRY_MS.
-  -- ready      fcitx5 is there and answering
-  state = "idle",
-  pipe = nil,
-  buf = "",
-  auth = true, -- still in the text (SASL) phase
-  serial = 0,
-  pending = {}, -- serial -> { cb, timer }
-  getting = false, -- one poll already in flight
-  retry_at = 0,
-}
+-- One socket out of a D-Bus address, which may list several separated by
+-- semicolons. Returns the path and whether it is an abstract socket.
+---@return string|nil path, boolean abstract
+local function parse_addr(addr)
+  for part in addr:gmatch("[^;]+") do
+    if part:match("^unix:") then
+      local p = part:match("[,:]path=([^,]*)")
+      if p and p ~= "" then
+        return p, false
+      end
+      -- Abstract sockets are named by a leading NUL, which uv_pipe_connect
+      -- would cut the name at; connect2 takes an explicit length instead.
+      local a = part:match("[,:]abstract=([^,]*)")
+      if a and a ~= "" then
+        return " " .. a, true
+      end
+    end
+  end
+  return nil, false
+end
 
-local ensure, hello, on_signal
-
--- The session bus socket. DBUS_SESSION_BUS_ADDRESS is authoritative and may
--- list several addresses; the systemd default is the fallback for shells that
--- never got the variable exported -- a GUI-launched Neovim, again.
+-- The session bus socket, where fcitx5 lives. DBUS_SESSION_BUS_ADDRESS is
+-- authoritative; the systemd default is the fallback for shells that never got
+-- the variable exported -- a GUI-launched Neovim, again.
 ---@return string|nil path, boolean abstract
 local function bus_path()
   local addr = vim.env.DBUS_SESSION_BUS_ADDRESS
   if addr then
-    for part in addr:gmatch("[^;]+") do
-      if part:match("^unix:") then
-        local p = part:match("[,:]path=([^,]*)")
-        if p and p ~= "" then
-          return p, false
-        end
-        -- Abstract sockets are named by a leading NUL, which uv_pipe_connect
-        -- would cut the name at; connect2 takes an explicit length instead.
-        local a = part:match("[,:]abstract=([^,]*)")
-        if a and a ~= "" then
-          return "\0" .. a, true
-        end
-      end
+    local p, abstract = parse_addr(addr)
+    if p then
+      return p, abstract
     end
   end
   local uid = uv.getuid and uv.getuid()
@@ -329,238 +315,513 @@ local function bus_path()
   return nil, false
 end
 
--- Answer one in-flight call exactly once and release its timer.
-local function finish(serial, msg)
-  local p = conn.pending[serial]
-  if not p then
-    return
-  end
-  conn.pending[serial] = nil
-  p.timer:stop()
-  p.timer:close()
-  p.cb(msg)
-end
+-- --------------------------------------------------------- ibus value decoding
 
--- Drop the connection and fail every in-flight call, so a socket that died
--- cannot leave a caller waiting forever. `cooldown` holds off the next attempt.
-local function reset(cooldown)
-  local pipe = conn.pipe
-  conn.pipe = nil
-  if pipe then
-    pcall(pipe.read_stop, pipe)
-    pcall(pipe.close, pipe)
-  end
-  for serial in pairs(conn.pending) do
-    finish(serial, nil)
-  end
-  conn.buf, conn.auth, conn.serial, conn.getting = "", true, 0, false
-  conn.state = "idle"
-  conn.retry_at = now_ms() + (cooldown or 0)
-end
-
----@param args string[]
----@param cb fun(reply:table|nil)
-local function call(dest, path, iface, member, args, cb)
-  if not conn.pipe then
-    cb(nil)
-    return
-  end
-  conn.serial = conn.serial + 1
-  local serial = conn.serial
-  local timer = uv.new_timer()
-  conn.pending[serial] = { cb = cb, timer = timer }
-  timer:start(CALL_TIMEOUT, 0, function()
-    finish(serial, nil)
-  end)
-  local ok = pcall(function()
-    conn.pipe:write(encode_call(serial, dest, path, iface, member, args), function(err)
-      if err then
-        finish(serial, nil)
-      end
-    end)
-  end)
-  if not ok then
-    finish(serial, nil)
-  end
-end
-
-local function on_read(err, chunk)
-  if err or not chunk then
-    reset(RETRY_MS) -- EOF: the bus went away
-    return
-  end
-  conn.buf = conn.buf .. chunk
-
-  if conn.auth then
-    -- The SASL phase is line based; everything after the OK line is binary.
-    local line, rest = conn.buf:match("^(.-)\r\n(.*)$")
-    if not line then
-      return
-    end
-    if not line:match("^OK") then
-      reset(RETRY_MS) -- REJECTED / ERROR: nothing here can fix that
-      return
-    end
-    conn.buf, conn.auth = rest, false
-    pcall(function()
-      conn.pipe:write("BEGIN\r\n")
-    end)
-    hello()
-  end
-
-  while true do
-    local total = frame_len(conn.buf)
-    if not total or #conn.buf < total then
-      break
-    end
-    local msg = decode(conn.buf:sub(1, total))
-    conn.buf = conn.buf:sub(total + 1)
-    if msg then
-      if msg.reply_serial then
-        finish(msg.reply_serial, msg.type == MSG_RETURN and msg or nil)
-      elseif msg.type == MSG_SIGNAL then
-        on_signal(msg)
-      end
-    end
-  end
-end
-
--- The one signal we subscribed to: fcitx5 appearing on or leaving the bus.
+-- The engine name out of what ibus answers GetGlobalEngine with: a VARIANT
+-- holding an IBusEngineDesc, whose signature is (sa{sv}ssssssssusssssss) and
+-- whose third field is the name we want ("hangul", "xkb:us::eng").
 --
--- NameOwnerChanged(name, old_owner, new_owner), and the match rule pins arg0 to
--- fcitx5's name, so only the new owner matters -- empty means it just left.
--- This is what turns "start fcitx5 and wait up to RETRY_MS for a re-probe" into
--- "start fcitx5 and the next redraw has it".
-function on_signal(m)
-  if m.iface ~= BUS_IFACE or m.member ~= "NameOwnerChanged" then
-    return
+-- Reaching it does not need a general unmarshaller. The two fields in the way
+-- are a string, which carries its own length, and an a{sv}, which carries the
+-- byte length of its contents -- so the dict can be *skipped* rather than
+-- parsed, whatever ends up in it. That is the difference between the ~25 lines
+-- here and a variant/dict reader the size of the rest of this file.
+---@return string|nil
+local function ibus_engine_name(body, le)
+  local sig, i = get_sig(body, 1)
+  -- Anything but a struct opening with a string means ibus changed the shape
+  -- under us; better to report nothing than to read the wrong field.
+  if not sig:match("^%(s") then
+    return nil
   end
-  local _, i = get_str(m.body, 1, m.le) -- name, already known from arg0
-  local _, j = get_str(m.body, i, m.le) -- previous owner, not ours to care about
-  local new_owner = get_str(m.body, j, m.le)
-  conn.state = (new_owner and new_owner ~= "") and "ready" or "waiting"
+  i = align(i, 8) -- STRUCT
+  local _, j = get_str(body, i, le) -- "IBusEngineDesc"
+  j = align(j, 4)
+  local len = get_u32(body, j, le)
+  if not len then
+    return nil
+  end
+  -- An array length is followed by padding to the element alignment -- 8 for a
+  -- dict entry -- and that padding is there even when the array is empty,
+  -- which in practice it always is.
+  j = align(j + 4, 8) + len
+  local name = get_str(body, j, le)
+  return name ~= "" and name or nil
 end
 
--- Register with the bus, then decide whether this backend can serve at all.
-function hello()
-  call(BUS_NAME, BUS_PATH, BUS_IFACE, "Hello", {}, function(m)
-    if not m then
-      return reset(RETRY_MS)
+-- ------------------------------------------------------------------ transport
+
+-- One connection to one bus. fcitx5 and ibus do not share a bus, so the plugin
+-- keeps two of these. Each sits idle until something happens on it, and the one
+-- whose daemon is absent never dials at all -- there is no address to dial.
+--
+-- `spec` supplies what differs between them: where to dial, whose name to
+-- watch, which signals to ask for, and what to do once the daemon is there.
+local function new_conn(spec)
+  local c = {
+    -- idle       nothing open; ensure() may dial once retry_at has passed
+    -- connecting socket open, handshake in flight
+    -- waiting    connected and subscribed, but the daemon does not own its
+    --            name. A definite answer, not a transient one: we sit on the
+    --            open socket and let NameOwnerChanged say when that changes,
+    --            instead of re-dialling and re-handshaking every RETRY_MS.
+    -- ready      the daemon is there and answering
+    state = "idle",
+    pipe = nil,
+    buf = "",
+    auth = true, -- still in the text (SASL) phase
+    serial = 0,
+    pending = {}, -- serial -> { cb, timer }
+    getting = false, -- one poll already in flight
+    retry_at = 0,
+    cache = nil, -- last value a signal pushed, for providers that get one
+    spec = spec,
+  }
+
+  -- Answer one in-flight call exactly once and release its timer.
+  local function finish(serial, msg)
+    local p = c.pending[serial]
+    if not p then
+      return
     end
-    -- Subscribe *before* probing. The other order has a hole: fcitx5 starting
-    -- between the probe and the subscription is missed entirely, and nothing
-    -- would ever come along to correct it.
-    call(BUS_NAME, BUS_PATH, BUS_IFACE, "AddMatch", { MATCH_FCITX_OWNER }, function(added)
-      if not added then
-        return reset(RETRY_MS)
-      end
-      -- Ask the bus who owns the name rather than calling fcitx5 to see what
-      -- happens: it is one round trip, it cannot auto-start an input method, and
-      -- a "no" here is what lets backend.lua fall back to the ibus CLI.
-      call(BUS_NAME, BUS_PATH, BUS_IFACE, "NameHasOwner", { FCITX_NAME }, function(r)
-        -- BOOLEAN travels as a u32.
-        conn.state = (r and get_u32(r.body, 1, r.le) == 1) and "ready" or "waiting"
+    c.pending[serial] = nil
+    p.timer:stop()
+    p.timer:close()
+    p.cb(msg)
+  end
+
+  -- Drop the connection and fail every in-flight call, so a socket that died
+  -- cannot leave a caller waiting forever. `cooldown` holds off the next try.
+  local function reset(cooldown)
+    local pipe = c.pipe
+    c.pipe = nil
+    if pipe then
+      pcall(pipe.read_stop, pipe)
+      pcall(pipe.close, pipe)
+    end
+    for serial in pairs(c.pending) do
+      finish(serial, nil)
+    end
+    c.buf, c.auth, c.serial, c.getting, c.cache = "", true, 0, false, nil
+    c.state = "idle"
+    c.retry_at = now_ms() + (cooldown or 0)
+  end
+  c.reset = reset
+
+  ---@param args string[]
+  ---@param cb fun(reply:table|nil)
+  local function call(dest, path, iface, member, args, cb)
+    if not c.pipe then
+      cb(nil)
+      return
+    end
+    c.serial = c.serial + 1
+    local serial = c.serial
+    local timer = uv.new_timer()
+    c.pending[serial] = { cb = cb, timer = timer }
+    timer:start(CALL_TIMEOUT, 0, function()
+      finish(serial, nil)
+    end)
+    local ok = pcall(function()
+      c.pipe:write(encode_call(serial, dest, path, iface, member, args), function(err)
+        if err then
+          finish(serial, nil)
+        end
       end)
     end)
-  end)
-end
-
-local function connect()
-  local path, abstract = bus_path()
-  if not path or (abstract and not uv.pipe_connect2) then
-    -- No bus, or an abstract address on a Neovim too old for connect2
-    -- (luv < 1.46). Either way: nothing to talk to, try again later.
-    conn.state = "idle"
-    conn.retry_at = now_ms() + RETRY_MS
-    return
-  end
-  local pipe = uv.new_pipe(false)
-  conn.pipe = pipe
-  conn.state = "connecting"
-  local function connected(cerr)
-    if cerr or conn.pipe ~= pipe then
-      return reset(RETRY_MS)
+    if not ok then
+      finish(serial, nil)
     end
-    pipe:read_start(on_read)
-    -- SASL EXTERNAL: the kernel already told the bus our uid over the socket,
-    -- so "authenticating" is just naming it -- as the hex of its decimal
-    -- spelling, after the NUL byte the protocol opens with.
-    local uid = tostring(uv.getuid and uv.getuid() or 0)
-    local hex = uid:gsub(".", function(c)
-      return ("%02x"):format(c:byte())
-    end)
-    pcall(function()
-      pipe:write("\0AUTH EXTERNAL " .. hex .. "\r\n")
-    end)
   end
-  local ok = pcall(function()
-    if abstract then
-      pipe:connect2(path, nil, connected)
-    else
-      pipe:connect(path, connected)
+  c.call = call
+
+  -- The daemon appearing on or leaving the bus. NameOwnerChanged carries
+  -- (name, old_owner, new_owner), and the match rule pins arg0 to the name we
+  -- watch, so only the new owner matters -- empty means it just left. This is
+  -- what turns "start the daemon, wait up to RETRY_MS for a re-probe" into
+  -- "start the daemon, the next redraw has it".
+  local function on_signal(m)
+    if m.iface == BUS_IFACE and m.member == "NameOwnerChanged" then
+      local _, i = get_str(m.body, 1, m.le) -- the name, already known from arg0
+      local _, j = get_str(m.body, i, m.le) -- previous owner, not ours to care about
+      local owner = get_str(m.body, j, m.le)
+      if owner and owner ~= "" then
+        c.state = "ready"
+        if spec.on_ready then
+          spec.on_ready(c)
+        end
+      else
+        c.state, c.cache = "waiting", nil
+      end
+      return
     end
-  end)
-  if not ok then
-    reset(RETRY_MS)
+    if spec.on_signal then
+      spec.on_signal(c, m)
+    end
   end
-end
 
-function ensure()
-  if conn.state ~= "idle" or now_ms() < conn.retry_at then
-    return
+  -- Register with the bus, subscribe, then decide whether this backend can
+  -- serve at all. The rules go on one at a time because each is a round trip
+  -- and the probe must not run until every one of them is in place.
+  local function hello()
+    call(BUS_NAME, BUS_PATH, BUS_IFACE, "Hello", {}, function(m)
+      if not m then
+        return reset(RETRY_MS)
+      end
+      local n = 0
+      local function next_rule()
+        n = n + 1
+        if n > #spec.rules then
+          -- Ask the bus who owns the name rather than calling the daemon to see
+          -- what happens: it is one round trip, it cannot auto-start an input
+          -- method, and a "no" here is what lets backend.lua fall back.
+          return call(BUS_NAME, BUS_PATH, BUS_IFACE, "NameHasOwner", { spec.name }, function(r)
+            -- BOOLEAN travels as a u32.
+            if r and get_u32(r.body, 1, r.le) == 1 then
+              c.state = "ready"
+              if spec.on_ready then
+                spec.on_ready(c)
+              end
+            else
+              c.state = "waiting"
+            end
+          end)
+        end
+        -- Subscribe *before* probing. The other order has a hole: a daemon that
+        -- starts between the probe and the subscription is missed entirely, and
+        -- nothing would ever come along to correct it.
+        call(BUS_NAME, BUS_PATH, BUS_IFACE, "AddMatch", { spec.rules[n] }, function(added)
+          if not added then
+            return reset(RETRY_MS)
+          end
+          next_rule()
+        end)
+      end
+      next_rule()
+    end)
   end
-  connect()
-end
 
--- ----------------------------------------------------------------- public API
+  local function on_read(err, chunk)
+    if err or not chunk then
+      reset(RETRY_MS) -- EOF: the bus went away
+      return
+    end
+    c.buf = c.buf .. chunk
 
--- True once the handshake finished *and* fcitx5 owns its bus name. False while
--- connecting, which is why it kicks the state machine on the way out: the
--- first poll starts the connection, a later one finds it ready.
----@return boolean
-function M.available()
-  if conn.state == "ready" then
-    return true
-  end
-  ensure()
-  return false
-end
+    if c.auth then
+      -- The SASL phase is line based; everything after the OK line is binary.
+      local line, rest = c.buf:match("^(.-)\r\n(.*)$")
+      if not line then
+        return
+      end
+      if not line:match("^OK") then
+        reset(RETRY_MS) -- REJECTED / ERROR: nothing here can fix that
+        return
+      end
+      c.buf, c.auth = rest, false
+      pcall(function()
+        c.pipe:write("BEGIN\r\n")
+      end)
+      hello()
+    end
 
--- Fetch the current input method name ("hangul", "keyboard-us", ...).
---
--- Staying silent is deliberate for the two transient cases -- not connected
--- yet, or a poll still in flight. The caller renders nil as `unknown`, and a
--- "?" blinking through the statusline whenever a reply is late is worse than
--- showing the previous label one tick longer. Real failures (error reply,
--- timeout) do answer nil.
----@param cb fun(raw:string|nil)
-function M.get_async(cb)
-  if conn.state == "waiting" then
-    -- Connected, and the bus says fcitx5 is not here. That is an answer, not a
-    -- transient miss, so give it: otherwise a fcitx5 that exits mid-session
-    -- leaves the label frozen on whatever it last reported.
-    cb(nil)
-    return
+    while true do
+      local total = frame_len(c.buf)
+      if not total or #c.buf < total then
+        break
+      end
+      local msg = decode(c.buf:sub(1, total))
+      c.buf = c.buf:sub(total + 1)
+      if msg then
+        if msg.reply_serial then
+          finish(msg.reply_serial, msg.type == MSG_RETURN and msg or nil)
+        elseif msg.type == MSG_SIGNAL then
+          on_signal(msg)
+        end
+      end
+    end
   end
-  if conn.state ~= "ready" then
-    ensure()
-    return
-  end
-  if conn.getting then
-    return
-  end
-  conn.getting = true
-  call(FCITX_NAME, FCITX_PATH, FCITX_IFACE, "CurrentInputMethod", {}, function(m)
-    conn.getting = false
-    if not m then
-      -- fcitx5 stopped answering; drop the connection so the next polls
-      -- re-probe instead of timing out one by one.
+
+  local function connect()
+    local path, abstract = spec.address()
+    if not path or (abstract and not uv.pipe_connect2) then
+      -- No bus, or an abstract address on a Neovim too old for connect2
+      -- (luv < 1.46). Either way: nothing to talk to, try again later.
+      c.state = "idle"
+      c.retry_at = now_ms() + RETRY_MS
+      return
+    end
+    local pipe = uv.new_pipe(false)
+    c.pipe = pipe
+    c.state = "connecting"
+    local function connected(cerr)
+      if cerr or c.pipe ~= pipe then
+        return reset(RETRY_MS)
+      end
+      pipe:read_start(on_read)
+      -- SASL EXTERNAL: the kernel already told the bus our uid over the socket,
+      -- so "authenticating" is just naming it -- as the hex of its decimal
+      -- spelling, after the NUL byte the protocol opens with.
+      local uid = tostring(uv.getuid and uv.getuid() or 0)
+      local hex = uid:gsub(".", function(ch)
+        return ("%02x"):format(ch:byte())
+      end)
+      pcall(function()
+        pipe:write("\0AUTH EXTERNAL " .. hex .. "\r\n")
+      end)
+    end
+    local ok = pcall(function()
+      if abstract then
+        pipe:connect2(path, nil, connected)
+      else
+        pipe:connect(path, connected)
+      end
+    end)
+    if not ok then
       reset(RETRY_MS)
+    end
+  end
+
+  function c.ensure()
+    if c.state ~= "idle" or now_ms() < c.retry_at then
+      return
+    end
+    connect()
+  end
+
+  return c
+end
+
+-- ------------------------------------------------------------------ providers
+
+-- Ask the bus to forward just the signals we act on. arg0 narrows a
+-- NameOwnerChanged to the one name we watch, so the daemon filters for us and a
+-- busy session bus costs us nothing.
+local function owner_rule(name)
+  return table.concat({
+    "type='signal'",
+    "sender='" .. BUS_NAME .. "'",
+    "path='" .. BUS_PATH .. "'",
+    "interface='" .. BUS_IFACE .. "'",
+    "member='NameOwnerChanged'",
+    "arg0='" .. name .. "'",
+  }, ",")
+end
+
+local fcitx5 = {
+  id = "fcitx5",
+  -- fcitx5 calls its latin input method "keyboard-us"; ibus calls the same
+  -- thing "xkb:us::eng", and handing one the other's id is a silent no-op.
+  latin = "keyboard-us",
+}
+fcitx5.conn = new_conn({
+  name = FCITX_NAME,
+  address = bus_path,
+  rules = { owner_rule(FCITX_NAME) },
+})
+
+-- fcitx5 has no signal for "the current input method changed" -- its
+-- Controller1 declares exactly one signal, InputMethodGroupsChanged, which is
+-- about groups. So this one still asks, once per poll, over a connection that
+-- is already open.
+function fcitx5.get(cb)
+  local c = fcitx5.conn
+  if c.getting then
+    return
+  end
+  c.getting = true
+  c.call(FCITX_NAME, FCITX_PATH, FCITX_IFACE, "CurrentInputMethod", {}, function(m)
+    c.getting = false
+    if not m then
+      -- On the bus but not answering: drop the connection so the next polls
+      -- re-probe instead of timing out one by one.
+      c.reset(RETRY_MS)
       cb(nil)
       return
     end
     cb((get_str(m.body, 1, m.le)))
   end)
+end
+
+function fcitx5.set(id, done)
+  fcitx5.conn.call(FCITX_NAME, FCITX_PATH, FCITX_IFACE, "SetCurrentIM", { id }, done)
+end
+
+-- ibus is not on the session bus. Its address is in $IBUS_ADDRESS, or in a file
+-- under ~/.config/ibus/bus/ named <machine-id>-<hostname>-<display>.
+--
+-- Rather than rebuild that name -- three lookups, each with its own way of
+-- being wrong, and two files on a machine that has both an X and a Wayland
+-- display -- read whatever is in the directory and take the first entry whose
+-- socket actually exists. A daemon that exited leaves its file behind with an
+-- empty IBUS_ADDRESS=, and a daemon that was replaced leaves a path that no
+-- longer resolves; both fall out of that check for free.
+---@return string|nil path, boolean abstract
+local function ibus_path()
+  -- An abstract socket cannot be stat()ed, so it is taken on trust and the
+  -- connect is left to fail if it is gone. A path can be checked, and is:
+  -- ibus names its socket after the daemon instance, so a stale one is a file
+  -- that still exists with nothing behind it.
+  local function usable(addr)
+    if not addr or addr == "" then
+      return nil, false
+    end
+    local path, abstract = parse_addr(addr)
+    if path and (abstract or uv.fs_stat(path)) then
+      return path, abstract
+    end
+    return nil, false
+  end
+
+  -- $IBUS_ADDRESS wins, but only while it still names something. Inheriting a
+  -- variable that outlived its daemon is ordinary -- a shell opened before the
+  -- last restart has one -- and the file on disk is then the *newer* answer, so
+  -- a dead variable falls through to it rather than pinning us to a corpse.
+  local path, abstract = usable(vim.env.IBUS_ADDRESS)
+  if path then
+    return path, abstract
+  end
+
+  local home = vim.env.XDG_CONFIG_HOME
+  home = (home and home ~= "" and home) or ((vim.env.HOME or "") .. "/.config")
+  local dir = home .. "/ibus/bus"
+  local fd = uv.fs_scandir(dir)
+  if not fd then
+    return nil, false
+  end
+  while true do
+    local entry = uv.fs_scandir_next(fd)
+    if not entry then
+      return nil, false
+    end
+    local f = io.open(dir .. "/" .. entry, "r")
+    if f then
+      local text = f:read("*a") or ""
+      f:close()
+      -- The file opens with comment lines, so match the assignment, not line 1.
+      -- A daemon that exited leaves the file behind with an empty value.
+      path, abstract = usable(text:match("IBUS_ADDRESS=([^\n\r]*)"))
+      if path then
+        return path, abstract
+      end
+    end
+  end
+end
+
+local ibus = {
+  id = "ibus",
+  latin = "xkb:us::eng",
+}
+ibus.conn = new_conn({
+  name = IBUS_NAME,
+  address = ibus_path,
+  rules = {
+    owner_rule(IBUS_NAME),
+    table.concat({
+      "type='signal'",
+      "sender='" .. IBUS_NAME .. "'",
+      "path='" .. IBUS_PATH .. "'",
+      "interface='" .. IBUS_IFACE .. "'",
+      "member='GlobalEngineChanged'",
+    }, ","),
+  },
+  -- The initial value is the only thing that needs the variant unpacked; every
+  -- change after it arrives as a plain string on GlobalEngineChanged.
+  on_ready = function(c)
+    c.call(IBUS_NAME, IBUS_PATH, IBUS_IFACE, "GetGlobalEngine", {}, function(m)
+      -- An error reply here is ordinary, not a fault: a freshly started daemon
+      -- with nothing selected answers "No global engine." Leave the cache empty
+      -- and let the first switch fill it.
+      c.cache = m and ibus_engine_name(m.body, m.le) or nil
+    end)
+  end,
+  on_signal = function(c, m)
+    if m.iface == IBUS_IFACE and m.member == "GlobalEngineChanged" then
+      c.cache = get_str(m.body, 1, m.le)
+    end
+  end,
+})
+
+-- No round trip: ibus pushes every change, so a poll is a table read. This is
+-- what the polling interval costs on ibus once the subscription is up.
+function ibus.get(cb)
+  cb(ibus.conn.cache)
+end
+
+function ibus.set(id, done)
+  ibus.conn.call(IBUS_NAME, IBUS_PATH, IBUS_IFACE, "SetGlobalEngine", { id }, done)
+end
+
+-- Order is preference. A machine running both is unusual and nothing on either
+-- bus says which one the terminal is actually talking to, so the tie is broken
+-- the same way every time rather than cleverly.
+local PROVIDERS = { fcitx5, ibus }
+
+---@return table|nil
+local function active()
+  for _, p in ipairs(PROVIDERS) do
+    if p.conn.state == "ready" then
+      return p
+    end
+  end
+  return nil
+end
+
+-- ----------------------------------------------------------------- public API
+
+-- True once a handshake finished *and* that daemon owns its bus name. False
+-- while connecting, which is why it kicks the state machines on the way out:
+-- the first poll starts the connections, a later one finds one ready.
+---@return boolean
+function M.available()
+  -- Every provider gets kicked, not just until one answers. Warming the standby
+  -- connection is what makes the hand-over instant when the preferred daemon
+  -- exits -- and it is nearly free: ensure() returns immediately unless the
+  -- connection is idle and past its backoff, and a machine without the second
+  -- daemon has no address to dial, so it never opens a socket at all.
+  for _, p in ipairs(PROVIDERS) do
+    p.conn.ensure()
+  end
+  return active() ~= nil
+end
+
+-- Which daemon is answering: "fcitx5", "ibus", or nil. backend.lua needs it
+-- because the two do not share an id vocabulary for the latin input method.
+---@return string|nil
+function M.provider()
+  local p = active()
+  return p and p.id
+end
+
+-- The id this provider calls its latin/english input method.
+---@return string|nil
+function M.latin()
+  local p = active()
+  return p and p.latin
+end
+
+-- Fetch the current input method name ("hangul", "keyboard-us", "xkb:us::eng").
+--
+-- Staying silent is deliberate for the transient cases -- not connected yet, or
+-- a poll still in flight. The caller renders nil as `unknown`, and a "?"
+-- blinking through the statusline whenever a reply is late is worse than
+-- showing the previous label one tick longer. Real failures answer nil.
+---@param cb fun(raw:string|nil)
+function M.get_async(cb)
+  local p = active()
+  if p then
+    return p.get(cb)
+  end
+  M.available() -- nothing ready; keep the state machines turning
+  for _, q in ipairs(PROVIDERS) do
+    if q.conn.state == "waiting" then
+      -- Connected, and the bus says the daemon is not here. That is an answer,
+      -- not a transient miss, so give it: otherwise a daemon that exits
+      -- mid-session leaves the label frozen on whatever it last reported.
+      cb(nil)
+      return
+    end
+  end
 end
 
 -- Switch the input method. `cb` always runs exactly once, success or not, so
@@ -569,28 +830,33 @@ end
 ---@param cb fun()|nil
 function M.set_async(id, cb)
   local done = cb or function() end
-  if conn.state ~= "ready" then
-    ensure()
+  local p = active()
+  if not p then
+    M.available()
     done()
     return
   end
-  call(FCITX_NAME, FCITX_PATH, FCITX_IFACE, "SetCurrentIM", { id }, done)
+  p.set(id, done)
 end
 
 -- Backs :IMEStatusReload -- reconnect now rather than after the backoff.
 function M.reload()
-  reset(0)
+  for _, p in ipairs(PROVIDERS) do
+    p.conn.reset(0)
+  end
 end
 
--- Why the native backend is not serving, for :checkhealth. Separates the four
--- cases that look identical from the outside -- the label just never changes --
--- but need opposite fixes.
----@return "ready"|"no_bus"|"stale_bus"|"unreachable"|"no_fcitx5"
-function M.diagnose()
-  if conn.state == "ready" then
+-- Why a backend is not serving, for :checkhealth. Separates the cases that look
+-- identical from the outside -- the label just never changes -- but need
+-- opposite fixes. `which` is "fcitx5" (the default) or "ibus".
+---@param which string|nil
+---@return "ready"|"no_bus"|"stale_bus"|"unreachable"|"no_daemon"
+function M.diagnose(which)
+  local p = (which == "ibus") and ibus or fcitx5
+  if p.conn.state == "ready" then
     return "ready"
   end
-  local path, abstract = bus_path()
+  local path, abstract = p.conn.spec.address()
   if not path then
     return "no_bus"
   end
@@ -603,13 +869,12 @@ function M.diagnose()
   end
   -- The variable outliving the daemon is the normal state of a WSL shell, a
   -- bare TTY or a container: the address is inherited but nothing is listening.
-  -- Indistinguishable from "fcitx5 is not running" at the socket, and the two
-  -- send the user to opposite fixes, so separate them here. (Only the env-var
-  -- path can be stale; bus_path() already stat()s the systemd fallback.)
+  -- Indistinguishable from "the daemon is not running" at the socket, and the
+  -- two send the user to opposite fixes, so separate them here.
   if not abstract and not uv.fs_stat(path) then
     return "stale_bus"
   end
-  return "no_fcitx5"
+  return "no_daemon"
 end
 
 -- Exposed for test/dbus_spec.lua: the codec is the half that can be checked
@@ -621,6 +886,8 @@ M._codec = {
   get_str = get_str,
   get_u32 = get_u32,
   bus_path = bus_path,
+  ibus_path = ibus_path,
+  ibus_engine_name = ibus_engine_name,
 }
 
 return M
