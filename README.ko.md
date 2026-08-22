@@ -18,15 +18,15 @@ Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 �
 
 ## 요구 사항
 
-Neovim만 있으면 됩니다. macOS와 Windows에서는 내장 LuaJIT FFI로 IME를 프로세스
-안에서 직접 조회하므로, 함께 설치할 바이너리도 `PATH`에서 찾아야 할 것도
-없습니다.
+Neovim만 있으면 됩니다. 지원하는 모든 OS에서 IME를 프로세스 안에서 직접 읽습니다 —
+macOS와 Windows는 내장 LuaJIT FFI로, Linux는 입력기 데몬에 D-Bus로 말을 걸어서요.
+함께 설치할 바이너리도 `PATH`에서 찾아야 할 것도 없습니다.
 
 | OS      | 설치할 것                                                            |
 | ------- | -------------------------------------------------------------------- |
 | macOS   | 없음 — 내장 FFI 백엔드 (Carbon TIS)                                  |
 | Windows | 없음 — 내장 FFI 백엔드 (user32/imm32)                                |
-| Linux   | fcitx5는 없음 — 내장 D-Bus 백엔드; ibus는 `ibus` CLI 필요            |
+| Linux   | 없음 — 내장 D-Bus 백엔드 (fcitx5, ibus 모두)                          |
 
 macOS 백엔드는 Carbon TIS API를 호출하므로 입력 소스 id가 시스템 전역에서 쓰이는
 값과 정확히 같습니다. Windows 백엔드는 user32/imm32를 거치는데, 덕분에
@@ -34,17 +34,31 @@ macOS 백엔드는 Carbon TIS API를 호출하므로 입력 소스 id가 시스�
 같은 레이아웃 조회 도구로는 아예 알 수 없는 상태입니다.
 
 **Linux에는 호출할 OS 수준 API가 없습니다.** 입력기가 상태를 쥐고 있고 자기 IPC로만
-공개하기 때문입니다. fcitx5는 세션 버스에서 응답하므로, 플러그인이 D-Bus로 직접
-말을 겁니다 — FFI 없이 순수 Lua로 소켓 위에서, `fcitx5-remote -n`이 하는 것과 똑같은
-`org.fcitx.Fcitx.Controller1.CurrentInputMethod` 호출을 프로세스 생성도 `PATH` 탐색도
-없이 수행합니다.
+공개하기 때문입니다. 그런데 실제로 쓰이는 두 데몬이 모두 D-Bus를 쓰므로, 플러그인도
+D-Bus로 되받아 말합니다 — FFI 없이 순수 Lua로 소켓 위에서. 프로세스 생성도 `PATH`
+탐색도 없습니다.
 
-ibus는 여전히 `ibus` CLI를 통합니다. **프라이빗 버스**에 살고, `GetGlobalEngine`이
-이름 대신 직렬화된 엔진 서술자를 돌려주기 때문입니다. 여기엔 주의점이 둘 있습니다.
-플러그인이 그 CLI를 **대신 설치하지 않으며**(Neovim 플러그인 매니저는 git 레포만
-관리합니다), ibus는 **ibus-hangul 내부의 한/영 토글을 아예 노출하지 않습니다** —
-그 토글을 쓰면 표시가 `한`에 고정됩니다. 한/영 키를 ibus **엔진 전환**으로 설정하거나,
-fcitx5를 쓰세요. `:checkhealth ime-status`가 상황을 알려줍니다.
+둘은 버스를 공유하지 않습니다. fcitx5는 세션 버스에서 응답하고, ibus는 자기 버스를
+따로 띄운 뒤 그 주소를 `~/.config/ibus/bus/`에 기록합니다. 플러그인은 양쪽에 연결을
+하나씩 들고 있다가 **실제로 떠 있는 쪽**을 씁니다. 그래서 둘 다 없는 머신에서는
+소켓을 아예 열지 않고, 도중에 데몬을 켜거나 끄면 그대로 따라갑니다.
+
+다만 둘은 대칭이 아니고, 그게 `interval`의 실제 비용을 가릅니다.
+
+- **fcitx5**는 "현재 입력기가 바뀌었다"는 시그널을 선언하지 않습니다 — `Controller1`의
+  시그널은 딱 하나인데 그건 입력기 **그룹**에 대한 것입니다. 그래서 폴링합니다. 한 번의
+  샘플링은 이미 열려 있는 소켓 위의 `CurrentInputMethod` 왕복 한 번, 즉
+  `fcitx5-remote -n`이 하는 것과 똑같은 호출을 프로세스 생성 없이 하는 것입니다.
+- **ibus**는 전환할 때마다 `GlobalEngineChanged`를 쏘므로 **폴링하지 않습니다.**
+  구독을 한 번 걸어두면, 샘플링은 데몬이 이미 밀어 넣어 둔 값을 읽는 일이 됩니다.
+
+두 연결 모두 `NameOwnerChanged`도 함께 봅니다. 그래서 데몬을 켜거나 끄면 재시도 타이머를
+기다리지 않고 다음 다시 그리기에 바로 반영됩니다.
+
+> D-Bus로도 해결되지 않는 ibus의 제약이 하나 있습니다. ibus는 **ibus-hangul 내부의
+> 한/영 토글을 노출하지 않습니다** — 그 토글로 전환하면 표시가 `한`에 고정됩니다.
+> 한/영 키를 ibus **엔진 전환**으로 설정하거나, fcitx5를 쓰세요.
+> `:checkhealth ime-status`가 상황을 알려줍니다.
 
 > LuaJIT이 아닌 순수 Lua로 빌드된 Neovim에는 FFI가 없습니다. 이 경우 macOS/Windows
 > 백엔드는 `macism` / `im-select.exe`가 `PATH`에 있으면 그쪽으로 넘어갑니다. Linux
@@ -100,19 +114,16 @@ vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
 require("ime-status").setup({
   interval = 300,        -- 폴링 주기 (ms)
   insert_only = false,   -- 인서트 모드일 때만 폴링
-  tool = nil,            -- ibus용, 또는 네이티브 백엔드를 끌 때: 입력 소스 도구의 이름
-                         -- 또는 절대경로. 상태 읽기와 전환에 모두 사용.
-                         -- 예: "/usr/bin/ibus"
+  tool = nil,            -- 네이티브 백엔드를 끌 때: 외부 도구의 이름 또는 절대경로.
+                         -- 상태 읽기와 전환에 모두 사용. 예: "/usr/bin/ibus"
   cmd = nil,             -- 저수준: 탐지 명령만 직접 지정
   set_cmd = nil,         -- 저수준: 전환 명령만 직접 지정. 리스트를 주면 뒤에 대상 id가
                          -- 붙고, function(id) -> { ... } 형태도 가능
   labels = {             -- 첫 번째로 매칭되는 규칙 적용 (대소문자 무시 부분 문자열)
-    { match = "korean",   text = "한" },
-    { match = "hangul",   text = "한" },
-    { match = "japanese", text = "あ" },
-    { match = "pinyin",   text = "中" },
-    { match = "chinese",  text = "中" },
-  },
+    { match = "korean",   text = "한" },  -- 그리고 hangul
+    { match = "japanese", text = "あ" },  -- 그리고 kotoeri, anthy, mozc, kkc, skk
+    { match = "chinese",  text = "中" },  -- 그리고 pinyin, shuangpin, bopomofo, zhuyin,
+  },                                      -- cangjie, chewing, wubi, scim, tcim, …
   default = "EN",        -- 어떤 규칙에도 안 맞을 때 표시
   unknown = "?",         -- 백엔드가 아무것도 반환하지 않을 때 표시
   format = function(label) return label end,
@@ -124,6 +135,16 @@ require("ime-status").setup({
   pause_on_focus_lost = false, -- Neovim / 터미널이 비포커스일 때 폴링 중단
 })
 ```
+
+기본 규칙의 대부분은 언어 이름이 아니라 **엔진 이름**입니다. 백엔드가 실제로 그걸
+보고하기 때문입니다. Linux에서 원시 id는 입력기가 스스로를 부르는 이름인데, 일본어
+엔진 중 이름에 "japanese"가 들어가는 것은 하나도 없습니다 — `anthy`, `mozc`, `kkc`,
+`skk` 전부요. `labels`를 직접 주면 목록이 **통째로 교체**되므로, 남기고 싶은 규칙은
+함께 적어 주세요.
+
+어떤 엔진이 켜져 있는데 `EN`으로 보인다면, `:IMEStatusReload` 후
+`:lua print(require("ime-status").raw)`로 실제 id를 확인하고 규칙을 추가하세요.
+그 id를 담은 이슈도 환영합니다.
 
 ### 자동 전환 — 노멀 모드에서 `j`/`k`가 한글로 입력되는 문제 해결
 
@@ -158,36 +179,38 @@ end
 
 ## 참고 사항 및 트레이드오프
 
-- **폴링은 불가피합니다.** 터미널 환경에는 "방금 OS가 IME를 전환했다"는 이벤트가
-  없으므로, 상태는 `interval`(ms)마다(그리고 모드 전환 시 즉시) 샘플링됩니다.
-  macOS와 Windows에서는 한 번의 샘플링이 프로세스 내부 FFI 호출이라 기본값 300ms도
-  사실상 비용이 없고, fcitx5 샘플링도 마찬가지입니다 — 이미 열려 있는 소켓 왕복이라서요.
-  프로세스를 띄우는 건 ibus 경로뿐이니, 부담이 느껴지면 그쪽에서 `interval`을 높이거나
-  `insert_only = true`로 두세요.
+- **폴링, 그리고 폴링이 필요 없는 곳.** 터미널 환경에는 "방금 IME가 바뀌었다"는 OS
+  이벤트가 없으므로, 상태는 `interval`(ms)마다(그리고 모드 전환 시 즉시) 샘플링됩니다.
+  한 번의 샘플링 비용은 백엔드마다 다릅니다. macOS와 Windows는 프로세스 내부 FFI 호출,
+  fcitx5는 이미 열려 있는 소켓 위의 왕복 한 번, ibus는 **아무 비용도 없습니다** —
+  묻는 게 아니라 밀어 넣어 주니까요. 프로세스를 띄우는 것은 외부 도구 폴백뿐이고,
+  `interval`을 높이거나 `insert_only = true`를 두는 것이 값을 하는 경우도 그때뿐입니다.
 - **Linux에서 입력기가 안 돌고 있다면?** 플러그인은 우아하게 비활성화됩니다 —
-  `get()`은 `default`를 반환하고 에러는 발생하지 않습니다. 탐지는 사용 중에도 계속
-  재시도되므로, 나중에 fcitx5를 켜거나 `ibus` CLI를 설치해도 Neovim을 재시작할 필요가
-  없습니다. 바로 확인하려면 `:IMEStatusReload`를 실행하세요. `:checkhealth ime-status`도
-  참고하세요.
+  `get()`은 `default`를 반환하고 에러는 발생하지 않습니다. 두 연결 모두 계속
+  재시도하므로, 나중에 fcitx5나 ibus를 켜면 Neovim을 재시작할 필요 없이 동작하기
+  시작합니다. 바로 확인하려면 `:IMEStatusReload`를 실행하세요.
+  `:checkhealth ime-status`는 이 머신에서 각 데몬이 어떤 상태이고 **왜** 그런지
+  알려줍니다.
 - **fcitx5인데 라벨이 계속 `?`로 보인다면?** fcitx5는 **포커스된 클라이언트**의
   입력기를 알려주므로, 포커스가 아무 데도 없으면 빈 이름을 반환하고 라벨은
   `unknown`으로 떨어집니다. Neovim이 백그라운드일 때는 정상이며,
   `pause_on_focus_lost = true`면 아예 폴링을 멈춥니다. 계속 `?`만 보인다면 쓰시는
   터미널이 fcitx5 클라이언트가 아닐 가능성이 큽니다 — `GTK_IM_MODULE` /
   `QT_IM_MODULE` / `XMODIFIERS`를 확인하시거나, `unknown = ""`으로 숨기세요.
-- **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?** ibus에서 생기는 문제이며,
-  macOS/Windows에서는 `tool`/`cmd`를 지정해 네이티브 백엔드를 끈 경우에만 해당됩니다.
-  `.desktop` 런처, Neovide, macOS `.app` 등은 셸 rc 파일을 읽지 않으므로 `PATH`에서
-  도구를 찾지 못합니다. `:echo $PATH`로 확인한 뒤, 런처의 환경을 고치거나 절대경로를
-  직접 지정하세요:
+- **터미널에서는 되는데 GUI로 Neovim을 띄우면 안 된다면?** `tool`/`cmd`를 지정해
+  네이티브 백엔드를 끈 경우에만 해당됩니다. `.desktop` 런처, Neovide, macOS `.app` 등은
+  셸 rc 파일을 읽지 않으므로, 터미널에서는 되던 도구를 `PATH`에서 찾지 못합니다.
+  `:echo $PATH`로 확인한 뒤, 런처의 환경을 고치거나 절대경로를 직접 지정하세요:
 
   ```lua
   require("ime-status").setup({ tool = "/usr/bin/ibus" })
   ```
 
-  fcitx5는 해당이 없습니다. D-Bus 백엔드는 `PATH`가 아니라
-  `$DBUS_SESSION_BUS_ADDRESS`(없으면 `/run/user/<uid>/bus`)를 봅니다. Neovim 안에서 그
-  변수가 비어 있다면 `:checkhealth ime-status`가 알려줍니다.
+  네이티브 백엔드는 `PATH`를 보지 않습니다. Linux 백엔드는 fcitx5에 대해
+  `$DBUS_SESSION_BUS_ADDRESS`(없으면 `/run/user/<uid>/bus`)를, ibus에 대해
+  `$IBUS_ADDRESS`(없으면 ibus가 `~/.config/ibus/bus/`에 쓴 파일)를 봅니다. Neovim
+  안에서 이 값들이 비어 있거나 낡았다면 `:checkhealth ime-status`가 어느 쪽인지와
+  무엇을 해야 하는지 알려줍니다.
 
 ## 라이선스
 

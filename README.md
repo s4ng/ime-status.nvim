@@ -20,15 +20,16 @@ below.
 
 ## Requirements
 
-Just Neovim. On macOS and Windows the plugin queries the IME in-process through
-the built-in LuaJIT FFI — there is no companion binary to install and nothing to
+Just Neovim. On every supported OS the plugin reads the IME in-process — through
+the built-in LuaJIT FFI on macOS and Windows, and by speaking D-Bus to the input
+method daemon on Linux. There is no companion binary to install and nothing to
 find on `PATH`.
 
 | OS      | What to install                                                    |
 | ------- | ------------------------------------------------------------------ |
 | macOS   | nothing — built-in FFI backend (Carbon TIS)                        |
 | Windows | nothing — built-in FFI backend (user32/imm32)                      |
-| Linux   | nothing for fcitx5 — built-in D-Bus backend; ibus needs its `ibus` CLI |
+| Linux   | nothing — built-in D-Bus backend (fcitx5 and ibus)                 |
 
 The macOS backend calls Carbon's TIS API, so input-source ids read exactly as
 they do system-wide. The Windows backend goes through user32/imm32, which also
@@ -36,18 +37,34 @@ sees the hangul/latin toggle *inside* the Korean/Japanese/Chinese IME — state 
 layout-reporting tool like `im-select` cannot report at all.
 
 **Linux has no OS-level API to call** — the input method owns the state and only
-exposes it over its own IPC. fcitx5 answers on the session bus, so the plugin
-speaks D-Bus to it directly, in plain Lua over a socket: the same
-`org.fcitx.Fcitx.Controller1.CurrentInputMethod` call `fcitx5-remote -n` makes,
-without the process spawn or the `PATH` lookup.
+exposes it over its own IPC. Both of the daemons people actually run speak
+D-Bus, so the plugin speaks it back, in plain Lua over a socket. No FFI, no
+process spawn, no `PATH` lookup.
 
-ibus is still driven through its `ibus` CLI, because it lives on a *private* bus
-and answers `GetGlobalEngine` with a serialised engine descriptor rather than a
-name. Two caveats there: the plugin does not install that CLI for you (Neovim
-plugin managers manage git repos, not system binaries), and ibus does not expose
-the hangul/latin toggle *inside* ibus-hangul at all — with that toggle the label
-stays on `한`. Configure the 한/영 key to switch ibus *engines* instead, or use
-fcitx5. Run `:checkhealth ime-status` for guidance.
+They do not share a bus: fcitx5 answers on the session bus, while ibus runs a
+private one and writes its address to `~/.config/ibus/bus/`. The plugin holds a
+connection to each and uses whichever daemon is running, so a machine with
+neither never opens a socket at all, and one where you start or stop a daemon
+mid-session follows along.
+
+The two are not symmetrical, and that is what `interval` actually costs:
+
+- **fcitx5** declares no signal for "the current input method changed" — its
+  `Controller1` has exactly one signal and it is about input-method *groups* —
+  so it is polled. A sample is one `CurrentInputMethod` round trip on a socket
+  that is already open: the same call `fcitx5-remote -n` makes, without the
+  spawn.
+- **ibus** emits `GlobalEngineChanged` on every switch, so it is not polled at
+  all. The plugin subscribes once, and a sample becomes a read of a value the
+  daemon already pushed.
+
+Both connections also watch `NameOwnerChanged`, so starting or stopping a daemon
+shows up on the next redraw instead of after a retry timer.
+
+> One ibus caveat no amount of D-Bus fixes: ibus does not expose the
+> hangul/latin toggle *inside* ibus-hangul, so if you switch with that toggle
+> the label stays on `한`. Configure the 한/영 key to switch ibus *engines*
+> instead, or use fcitx5. Run `:checkhealth ime-status` for guidance.
 
 > Neovim built against plain Lua rather than LuaJIT has no FFI. There the macOS
 > and Windows backends fall back to `macism` / `im-select.exe` if one happens to
@@ -102,19 +119,17 @@ Defaults:
 require("ime-status").setup({
   interval = 300,        -- polling interval (ms)
   insert_only = false,   -- only poll while in insert mode
-  tool = nil,            -- ibus, or to opt out of the native backend: name or absolute
-                         -- path of the input-source tool, used for both reading and
-                         -- switching, e.g. "/usr/bin/ibus"
+  tool = nil,            -- opt out of the native backend: name or absolute path of an
+                         -- external tool, used for both reading and switching,
+                         -- e.g. "/usr/bin/ibus"
   cmd = nil,             -- low-level: override only the detection command
   set_cmd = nil,         -- low-level: override only the switch command; a list gets
                          -- the target id appended, or pass function(id) -> { ... }
   labels = {             -- first match (case-insensitive substring) wins
-    { match = "korean",   text = "한" },
-    { match = "hangul",   text = "한" },
-    { match = "japanese", text = "あ" },
-    { match = "pinyin",   text = "中" },
-    { match = "chinese",  text = "中" },
-  },
+    { match = "korean",   text = "한" },  -- and hangul
+    { match = "japanese", text = "あ" },  -- and kotoeri, anthy, mozc, kkc, skk
+    { match = "chinese",  text = "中" },  -- and pinyin, shuangpin, bopomofo, zhuyin,
+  },                                      -- cangjie, chewing, wubi, scim, tcim, …
   default = "EN",        -- shown when no rule matches
   unknown = "?",         -- shown when the backend returns nothing
   format = function(label) return label end,
@@ -126,6 +141,16 @@ require("ime-status").setup({
   pause_on_focus_lost = false, -- stop polling while Neovim / the terminal is unfocused
 })
 ```
+
+Most of the default rules are *engine* names, not language names, because that
+is what the backends report. On Linux the raw id is whatever the input method
+calls itself, and not one Japanese engine — `anthy`, `mozc`, `kkc`, `skk` — has
+"japanese" anywhere in it. Supplying your own `labels` replaces the list
+wholesale, so keep the entries you still want.
+
+If an engine shows as `EN` while it is active, run `:IMEStatusReload` and check
+what id it reports (`:lua print(require("ime-status").raw)`), then add a rule for
+it — a bug report with that id is welcome too.
 
 ### Auto-switch — stop normal-mode `j`/`k` from typing 한글
 
@@ -162,17 +187,19 @@ end
 
 ## Notes & tradeoffs
 
-- **Polling is necessary.** In a terminal there is no event for "the OS just
-  switched IME", so the state is sampled every `interval` ms (plus immediately on
-  mode change). On macOS and Windows a sample is an in-process FFI call, so the
-  default 300 ms costs approximately nothing, and so does a fcitx5 sample — a
-  round trip on an already-open socket. Only the ibus path spawns a process per
-  sample, so raise `interval` or set `insert_only = true` if that shows up.
+- **Polling, and where it is not needed.** In a terminal there is no OS event
+  for "the IME just changed", so the state is sampled every `interval` ms (plus
+  immediately on mode change). What a sample costs depends on the backend: an
+  in-process FFI call on macOS and Windows, one round trip on an already-open
+  socket for fcitx5, and nothing at all for ibus, which pushes changes instead
+  of being asked. Only the external-tool fallback spawns a process per sample —
+  that is the case where raising `interval` or setting `insert_only = true`
+  earns its keep.
 - **Linux with no input method running?** The plugin degrades gracefully:
-  `get()` returns `default` and nothing errors. Detection is retried while you
-  work, so starting fcitx5 or installing the `ibus` CLI later starts working
-  without restarting Neovim — or run `:IMEStatusReload` to re-detect right away.
-  See `:checkhealth ime-status`.
+  `get()` returns `default` and nothing errors. Both connections keep trying, so
+  starting fcitx5 or ibus later begins working without restarting Neovim — or
+  run `:IMEStatusReload` to re-detect right away. `:checkhealth ime-status`
+  reports where each daemon stands, and why, for this machine.
 - **Label stuck on `?` under fcitx5?** fcitx5 reports the input method of the
   *focused* client, so when nothing has focus it answers with an empty name and
   the label falls back to `unknown`. That is normal while Neovim is in the
@@ -180,21 +207,22 @@ end
   never shows anything else, your terminal is probably not a fcitx5 client —
   check `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` — or set `unknown = ""`
   to hide it.
-- **Works in a terminal but not when Neovim is launched from a GUI?** An ibus
-  concern — or a macOS/Windows one only if you pinned `tool`/`cmd` and opted out
-  of the native backend. A `.desktop` launcher, Neovide or a macOS `.app` does
-  not read your shell rc, so the tool is missing from `PATH` and cannot be found.
-  Check `:echo $PATH`, and either fix the launcher's environment or pin an
-  absolute path:
+- **Works in a terminal but not when Neovim is launched from a GUI?** Only a
+  concern if you pinned `tool`/`cmd` and opted out of the native backend. A
+  `.desktop` launcher, Neovide or a macOS `.app` does not read your shell rc, so
+  a tool that works in a terminal is missing from `PATH` there. Check
+  `:echo $PATH`, and either fix the launcher's environment or pin an absolute
+  path:
 
   ```lua
   require("ime-status").setup({ tool = "/usr/bin/ibus" })
   ```
 
-  fcitx5 users are not affected: the D-Bus backend reads
-  `$DBUS_SESSION_BUS_ADDRESS` (falling back to `/run/user/<uid>/bus`), never
-  `PATH`. If that variable is missing inside Neovim, `:checkhealth ime-status`
-  says so.
+  The native backends never look at `PATH`. The Linux one reads
+  `$DBUS_SESSION_BUS_ADDRESS` (falling back to `/run/user/<uid>/bus`) for fcitx5
+  and `$IBUS_ADDRESS` (falling back to the file ibus writes under
+  `~/.config/ibus/bus/`) for ibus. If those are missing or stale inside Neovim,
+  `:checkhealth ime-status` says which one and what to do.
 
 ## License
 
