@@ -85,8 +85,17 @@ Measured facts worth not re-deriving (fcitx5 5.1.12, ibus 1.5.32):
 
 ## Conventions
 
-- Commit messages: gitmoji + Korean, e.g. `:sparkles: ibus 네이티브 D-Bus 백엔드 추가`.
-  Explain *why*, and what was measured, not just what changed.
+- Commit messages: **English**, `type: subject`, no gitmoji. Types in use are
+  `feat:`, `fix:`, `docs:`, `test:`, `chore:`; keep the subject lowercase and
+  under ~72 characters, e.g. `feat: native ibus D-Bus backend, dropping the
+  last external-tool dependency`. Explain *why*, and what was measured, not
+  just what changed.
+
+  The reason the language matters here: a Neovim plugin is distributed **as its
+  git repository**, so everyone who installs it clones the whole log. These
+  messages are user-facing text, not a private notebook. The Korean history up
+  to `docs: add statusline integration examples for five statuslines` was
+  rewritten into English for that reason — don't reintroduce a second language.
 - Comments explain the non-obvious — why a thing is done, what breaks otherwise.
   Match the density already in the file; do not narrate the code.
 - Never let the plugin error or block. A missing daemon, tool or bus degrades to
