@@ -6,6 +6,7 @@ CONTENTS                                                  *ime-status-contents*
   1. Introduction ........................... |ime-status-introduction|
   2. Requirements ........................... |ime-status-requirements|
   3. Setup .................................. |ime-status-setup|
+     Statusline integration ................. |ime-status-statusline|
   4. Configuration .......................... |ime-status-config|
   5. API .................................... |ime-status-api|
   6. Health ................................. |ime-status-health|
@@ -66,9 +67,42 @@ happens to be on PATH; the Linux backend uses no FFI and is unaffected.
 
 Call setup() once (this starts the polling timer): >lua
 
-    require("ime-status").setup({})
+    require("ime-status").setup({
+      auto_switch = true,          -- normal mode is always latin
+      pause_on_focus_lost = true,  -- no polling while unfocused
+    })
 <
-With lazy.nvim, `opts = {}` does this for you.
+With lazy.nvim, the same table as `opts = { ... }` does this for you. Both
+options above ship off; |ime-status-config| says what each one does.
+
+STATUSLINE INTEGRATION                                  *ime-status-statusline*
+
+|ime-status.component| is the thing to wire in. It reads a cache and never
+blocks, so calling it on every redraw costs nothing.
+
+A statusline that re-evaluates 'statusline' on redraw needs nothing else: the
+plugin calls `redrawstatus` itself when the label changes. >lua
+
+    vim.o.statusline = "%{v:lua.require'ime-status'.component()} %f"
+<
+A statusline that caches its components instead has to be told. heirline takes
+the event directly, in a component's `update` field: >lua
+
+    update = { "User", pattern = "IMEStatusChanged" },
+<
+lualine repaints from its own timer (`refresh.statusline`, 1000 ms) plus a
+fixed event list with no "User" in it, so the redraw does not reach it and the
+label can sit up to a second behind. Refresh it on the event instead: >lua
+
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "IMEStatusChanged",
+      callback = function()
+        require("lualine").refresh({ place = { "statusline" } })
+      end,
+    })
+<
+See the README for full per-statusline snippets (lualine, mini.statusline,
+heirline, lightline.vim, and the built-in statusline).
 
 ==============================================================================
 4. CONFIGURATION                                            *ime-status-config*

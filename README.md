@@ -40,38 +40,138 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   "s4ng/ime-status.nvim",
   event = "VeryLazy",
-  opts = {},
+  opts = {
+    auto_switch = true,          -- normal mode is always latin, so j/k stay j/k
+    pause_on_focus_lost = true,  -- no polling while the window is unfocused
+  },
 }
 ```
 
 `opts` is passed straight to `setup()`. Calling `setup()` is what starts the
-polling timer, so it must run once.
+polling timer, so it must run once. Both options above ship *off*; see
+[Auto-switch](#auto-switch--stop-normal-mode-jk-from-typing-한글) for what they
+do and how to have typing resume in the IME you left.
 
 ## Statusline integration
+
+The plugin is statusline-agnostic. `require("ime-status").component()` returns
+the current label, already passed through `format`, and never blocks — it reads
+a cache, so calling it on every redraw costs nothing. When the label changes the
+plugin calls `redrawstatus` and fires a `User IMEStatusChanged` autocmd, which
+is what the event-driven statuslines below hang off.
+
+Each snippet below assumes the spec above is already installed, and only adds
+the component.
 
 ### lualine
 
 ```lua
 {
   "nvim-lualine/lualine.nvim",
+  dependencies = { "s4ng/ime-status.nvim" },
   opts = function(_, opts)
-    require("ime-status").setup()
     table.insert(opts.sections.lualine_x, 1, { require("ime-status").component })
+
+    -- lualine repaints from its own timer (refresh.statusline, 1000 ms) and a
+    -- fixed event list with no "User" in it, so the plugin's redraw does not
+    -- reach it and the label can sit up to a second behind the IME. Refresh it
+    -- on the change event instead.
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "IMEStatusChanged",
+      callback = function()
+        require("lualine").refresh({ place = { "statusline" } })
+      end,
+    })
   end,
 }
 ```
 
-### Native statusline / heirline / anything else
+### mini.statusline
 
-`require("ime-status").get()` returns the current label string and never blocks.
+`content.active` replaces the whole line rather than merging into it, so the IME
+section goes into a copy of mini's own default layout:
 
 ```lua
-require("ime-status").setup()
-vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
+{
+  "echasnovski/mini.statusline",
+  dependencies = { "s4ng/ime-status.nvim" },
+  config = function()
+    local MiniStatusline = require("mini.statusline")
+    MiniStatusline.setup({
+      content = {
+        active = function()
+          local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+          local git = MiniStatusline.section_git({ trunc_width = 40 })
+          local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+          local filename = MiniStatusline.section_filename({ trunc_width = 140 })
+          local location = MiniStatusline.section_location({ trunc_width = 75 })
+          return MiniStatusline.combine_groups({
+            { hl = mode_hl, strings = { mode } },
+            { hl = "MiniStatuslineDevinfo", strings = { git, diagnostics } },
+            "%<",
+            { hl = "MiniStatuslineFilename", strings = { filename } },
+            "%=",
+            { hl = "MiniStatuslineFileinfo", strings = { require("ime-status").component() } },
+            { hl = mode_hl, strings = { location } },
+          })
+        end,
+      },
+    })
+  end,
+}
 ```
 
-The plugin fires a `User IMEStatusChanged` autocmd whenever the label changes, so
-event-driven statuslines can refresh precisely.
+### heirline
+
+heirline re-evaluates a component only on the events its `update` field names,
+so point that at the plugin's own event — nothing else has to redraw for it:
+
+```lua
+local IME = {
+  provider = function()
+    return " " .. require("ime-status").component() .. " "
+  end,
+  update = { "User", pattern = "IMEStatusChanged" },
+}
+
+require("heirline").setup({
+  statusline = { Mode, Space, FileName, Align, IME, Ruler },
+})
+```
+
+This is also the shape AstroNvim's statusline takes, since it is heirline
+underneath.
+
+### lightline.vim
+
+lightline components are Vimscript functions, so the getter is reached through
+`luaeval()`:
+
+```lua
+vim.cmd([[
+  function! IMEStatusLightline() abort
+    return luaeval("require('ime-status').component()")
+  endfunction
+]])
+
+vim.g.lightline = {
+  active = {
+    left = { { "mode", "paste" }, { "readonly", "filename", "modified" } },
+    right = { { "lineinfo" }, { "percent" }, { "ime", "filetype" } },
+  },
+  component_function = { ime = "IMEStatusLightline" },
+}
+```
+
+### Native statusline, and anything else
+
+```lua
+vim.o.statusline = " %f %m%r%=[%{v:lua.require'ime-status'.component()}] %l:%c "
+```
+
+Any statusline that re-evaluates `&statusline` on redraw needs nothing more:
+the plugin already asks for the redraw. One that caches instead — lualine and
+heirline above — wants the `User IMEStatusChanged` autocmd.
 
 ## Configuration
 

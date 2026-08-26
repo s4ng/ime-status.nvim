@@ -37,37 +37,132 @@ lualine 只是下面示例之一。
 {
   "s4ng/ime-status.nvim",
   event = "VeryLazy",
-  opts = {},
+  opts = {
+    auto_switch = true,          -- 普通模式始终为英文，j/k 仍然是 j/k
+    pause_on_focus_lost = true,  -- 窗口失去焦点时停止轮询
+  },
 }
 ```
 
 `opts` 会直接传给 `setup()`。启动轮询定时器的正是 `setup()`，因此它必须被调用一次。
+上面这两个选项默认都是*关闭*的；它们各自做什么，以及如何让重新输入时回到你上次用的
+输入法，见[自动切换](#自动切换--解决普通模式下-jk-被输入成中文韩文的问题)。
 
 ## 状态栏集成
+
+本插件不绑定任何特定状态栏。`require("ime-status").component()` 返回经过 `format`
+处理的当前标签，并且绝不会阻塞 —— 它只读缓存，所以每次重绘都调用也没有开销。标签
+变化时插件会自己调用 `redrawstatus` 并触发 `User IMEStatusChanged` autocmd，下面那些
+事件驱动的状态栏挂的就是这个事件。
+
+下面的片段假设上面的安装配置已经存在，只负责添加组件。
 
 ### lualine
 
 ```lua
 {
   "nvim-lualine/lualine.nvim",
+  dependencies = { "s4ng/ime-status.nvim" },
   opts = function(_, opts)
-    require("ime-status").setup()
     table.insert(opts.sections.lualine_x, 1, { require("ime-status").component })
+
+    -- lualine 只依靠自己的定时器（refresh.statusline，1000 毫秒）和一份不含
+    -- "User" 的固定事件列表来重绘，因此插件发出的重绘请求到不了它，标签可能比
+    -- 输入法慢上一秒。改为在变化事件里刷新 lualine。
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "IMEStatusChanged",
+      callback = function()
+        require("lualine").refresh({ place = { "statusline" } })
+      end,
+    })
   end,
 }
 ```
 
-### 原生 statusline / heirline / 其他
+### mini.statusline
 
-`require("ime-status").get()` 返回当前的标签字符串，且绝不会阻塞。
+`content.active` 是整行替换而不是合并，所以要把 IME 段落放进一份 mini 自带默认布局的
+副本里：
 
 ```lua
-require("ime-status").setup()
-vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
+{
+  "echasnovski/mini.statusline",
+  dependencies = { "s4ng/ime-status.nvim" },
+  config = function()
+    local MiniStatusline = require("mini.statusline")
+    MiniStatusline.setup({
+      content = {
+        active = function()
+          local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+          local git = MiniStatusline.section_git({ trunc_width = 40 })
+          local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+          local filename = MiniStatusline.section_filename({ trunc_width = 140 })
+          local location = MiniStatusline.section_location({ trunc_width = 75 })
+          return MiniStatusline.combine_groups({
+            { hl = mode_hl, strings = { mode } },
+            { hl = "MiniStatuslineDevinfo", strings = { git, diagnostics } },
+            "%<",
+            { hl = "MiniStatuslineFilename", strings = { filename } },
+            "%=",
+            { hl = "MiniStatuslineFileinfo", strings = { require("ime-status").component() } },
+            { hl = mode_hl, strings = { location } },
+          })
+        end,
+      },
+    })
+  end,
+}
 ```
 
-每当标签发生变化时，插件会触发 `User IMEStatusChanged` autocmd，因此事件驱动的状态栏
-可以在精确的时机刷新。
+### heirline
+
+heirline 只在组件 `update` 列出的事件上重新求值，所以把插件自己的事件填进去就够了
+—— 不需要别的东西来触发重绘：
+
+```lua
+local IME = {
+  provider = function()
+    return " " .. require("ime-status").component() .. " "
+  end,
+  update = { "User", pattern = "IMEStatusChanged" },
+}
+
+require("heirline").setup({
+  statusline = { Mode, Space, FileName, Align, IME, Ruler },
+})
+```
+
+AstroNvim 的状态栏底层就是 heirline，写法相同。
+
+### lightline.vim
+
+lightline 的组件是 Vimscript 函数，所以要通过 `luaeval()` 才能拿到这个 getter：
+
+```lua
+vim.cmd([[
+  function! IMEStatusLightline() abort
+    return luaeval("require('ime-status').component()")
+  endfunction
+]])
+
+vim.g.lightline = {
+  active = {
+    left = { { "mode", "paste" }, { "readonly", "filename", "modified" } },
+    right = { { "lineinfo" }, { "percent" }, { "ime", "filetype" } },
+  },
+  component_function = { ime = "IMEStatusLightline" },
+}
+```
+
+### 原生 statusline，以及其他
+
+```lua
+vim.o.statusline = " %f %m%r%=[%{v:lua.require'ime-status'.component()}] %l:%c "
+```
+
+只要状态栏在每次重绘时重新求值 `&statusline`，这样就够了 —— 重绘请求插件已经发了。
+反过来，会缓存结果的那一类（上面的 lualine 和 heirline）需要 `User IMEStatusChanged`
+autocmd。
 
 ## 配置
 

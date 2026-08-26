@@ -32,45 +32,142 @@ Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 �
 
 ## 설치
 
-[lazy.nvim](https://github.com/folke/lazy.nvim) 기준:
+[lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
   "s4ng/ime-status.nvim",
   event = "VeryLazy",
-  opts = {},
+  opts = {
+    auto_switch = true,          -- 노멀 모드는 항상 영문 → j/k가 j/k로 동작
+    pause_on_focus_lost = true,  -- 창이 포커스를 잃으면 폴링 중지
+  },
 }
 ```
 
 `opts`는 그대로 `setup()`에 전달됩니다. 폴링 타이머를 시작하는 것이 `setup()`
-이므로, 반드시 한 번은 호출되어야 합니다.
+이므로, 반드시 한 번은 호출되어야 합니다. 위 두 옵션의 기본값은 *꺼짐*입니다 —
+각각 무엇을 하는지, 그리고 입력을 시작할 때 쓰던 입력기로 되돌아오게 하는
+방법은 [자동 전환](#자동-전환--노멀-모드에서-jk가-한글로-입력되는-문제-해결)
+절을 보세요.
 
 ## 상태줄 연동
+
+이 플러그인은 특정 상태줄에 묶여 있지 않습니다.
+`require("ime-status").component()`는 `format`을 거친 현재 라벨을 반환하며 절대
+블로킹하지 않습니다 — 캐시를 읽을 뿐이라 매 redraw마다 호출해도 비용이 없습니다.
+라벨이 바뀌면 플러그인이 직접 `redrawstatus`를 호출하고 `User IMEStatusChanged`
+autocmd를 발생시키며, 아래 이벤트 기반 상태줄들이 붙는 곳이 바로 이 이벤트입니다.
+
+아래 스니펫은 위 설치 스펙이 이미 있다고 가정하고, 컴포넌트만 추가합니다.
 
 ### lualine
 
 ```lua
 {
   "nvim-lualine/lualine.nvim",
+  dependencies = { "s4ng/ime-status.nvim" },
   opts = function(_, opts)
-    require("ime-status").setup()
     table.insert(opts.sections.lualine_x, 1, { require("ime-status").component })
+
+    -- lualine은 자체 타이머(refresh.statusline, 1000 ms)와 "User"가 들어 있지
+    -- 않은 고정 이벤트 목록으로만 다시 그립니다. 그래서 플러그인의 redraw 요청이
+    -- 닿지 않아 라벨이 최대 1초까지 뒤처질 수 있습니다. 대신 변경 이벤트에서
+    -- lualine을 갱신하세요.
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "IMEStatusChanged",
+      callback = function()
+        require("lualine").refresh({ place = { "statusline" } })
+      end,
+    })
   end,
 }
 ```
 
-### Native statusline / heirline / 그 외
+### mini.statusline
 
-`require("ime-status").get()`은 현재 라벨 문자열을 반환하며 절대 블로킹하지
-않습니다.
+`content.active`는 병합이 아니라 상태줄 전체를 교체하므로, mini의 기본 레이아웃을
+복사한 뒤 그 안에 IME 구획을 넣습니다:
 
 ```lua
-require("ime-status").setup()
-vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
+{
+  "echasnovski/mini.statusline",
+  dependencies = { "s4ng/ime-status.nvim" },
+  config = function()
+    local MiniStatusline = require("mini.statusline")
+    MiniStatusline.setup({
+      content = {
+        active = function()
+          local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+          local git = MiniStatusline.section_git({ trunc_width = 40 })
+          local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+          local filename = MiniStatusline.section_filename({ trunc_width = 140 })
+          local location = MiniStatusline.section_location({ trunc_width = 75 })
+          return MiniStatusline.combine_groups({
+            { hl = mode_hl, strings = { mode } },
+            { hl = "MiniStatuslineDevinfo", strings = { git, diagnostics } },
+            "%<",
+            { hl = "MiniStatuslineFilename", strings = { filename } },
+            "%=",
+            { hl = "MiniStatuslineFileinfo", strings = { require("ime-status").component() } },
+            { hl = mode_hl, strings = { location } },
+          })
+        end,
+      },
+    })
+  end,
+}
 ```
 
-라벨이 바뀔 때마다 `User IMEStatusChanged` autocmd가 발생하므로, 이벤트 기반
-상태줄은 정확한 시점에 갱신할 수 있습니다.
+### heirline
+
+heirline은 컴포넌트의 `update`에 적힌 이벤트에서만 다시 평가합니다. 그러니 그
+자리에 플러그인의 이벤트를 넣으면 됩니다 — 다른 것이 redraw될 필요가 없습니다:
+
+```lua
+local IME = {
+  provider = function()
+    return " " .. require("ime-status").component() .. " "
+  end,
+  update = { "User", pattern = "IMEStatusChanged" },
+}
+
+require("heirline").setup({
+  statusline = { Mode, Space, FileName, Align, IME, Ruler },
+})
+```
+
+AstroNvim의 상태줄도 속은 heirline이므로 형태가 같습니다.
+
+### lightline.vim
+
+lightline의 컴포넌트는 Vimscript 함수이므로, `luaeval()`을 통해 게터에 닿습니다:
+
+```lua
+vim.cmd([[
+  function! IMEStatusLightline() abort
+    return luaeval("require('ime-status').component()")
+  endfunction
+]])
+
+vim.g.lightline = {
+  active = {
+    left = { { "mode", "paste" }, { "readonly", "filename", "modified" } },
+    right = { { "lineinfo" }, { "percent" }, { "ime", "filetype" } },
+  },
+  component_function = { ime = "IMEStatusLightline" },
+}
+```
+
+### 기본 statusline, 그리고 그 외
+
+```lua
+vim.o.statusline = " %f %m%r%=[%{v:lua.require'ime-status'.component()}] %l:%c "
+```
+
+redraw할 때마다 `&statusline`을 다시 평가하는 상태줄이라면 이것으로 끝입니다 —
+redraw 요청은 플러그인이 이미 보냅니다. 반대로 결과를 캐시하는 쪽(위의 lualine과
+heirline)에는 `User IMEStatusChanged` autocmd가 필요합니다.
 
 ## 설정
 

@@ -39,38 +39,141 @@ OS が管理しているためです。このプラグインは現在の入力�
 {
   "s4ng/ime-status.nvim",
   event = "VeryLazy",
-  opts = {},
+  opts = {
+    auto_switch = true,          -- ノーマルモードは常に英字 → j/k が j/k のまま
+    pause_on_focus_lost = true,  -- ウィンドウが非フォーカスの間はポーリング停止
+  },
 }
 ```
 
 `opts` はそのまま `setup()` に渡されます。ポーリングタイマーを開始するのは
-`setup()` なので、必ず一度は呼び出される必要があります。
+`setup()` なので、必ず一度は呼び出される必要があります。上の 2 つのオプションは
+既定では*オフ*です。それぞれの働きと、入力を再開したときに直前の入力メソッドへ
+戻す方法は
+[自動切り替え](#自動切り替え--ノーマルモードで-jk-がかなで入力される問題を解決)
+を参照してください。
 
 ## ステータスライン連携
+
+このプラグインは特定のステータスラインに依存しません。
+`require("ime-status").component()` は `format` を通した現在のラベルを返し、
+決してブロックしません — キャッシュを読むだけなので、再描画のたびに呼んでも
+コストはありません。ラベルが変わるとプラグイン自身が `redrawstatus` を呼び、
+`User IMEStatusChanged` autocmd を発火します。以下のイベント駆動な
+ステータスラインが引っ掛けるのは、このイベントです。
+
+以下のスニペットは上のインストール指定が済んでいる前提で、コンポーネントだけを
+追加します。
 
 ### lualine
 
 ```lua
 {
   "nvim-lualine/lualine.nvim",
+  dependencies = { "s4ng/ime-status.nvim" },
   opts = function(_, opts)
-    require("ime-status").setup()
     table.insert(opts.sections.lualine_x, 1, { require("ime-status").component })
+
+    -- lualine は自前のタイマー（refresh.statusline、1000 ms）と "User" を含まない
+    -- 固定のイベント一覧でしか再描画しません。そのためプラグインの再描画要求が
+    -- 届かず、ラベルが最大 1 秒ほど遅れることがあります。代わりに変更イベントで
+    -- lualine を更新します。
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "IMEStatusChanged",
+      callback = function()
+        require("lualine").refresh({ place = { "statusline" } })
+      end,
+    })
   end,
 }
 ```
 
-### ネイティブ statusline / heirline / その他
+### mini.statusline
 
-`require("ime-status").get()` は現在のラベル文字列を返し、決してブロックしません。
+`content.active` はマージではなく行全体を置き換えるので、mini 自身の既定
+レイアウトを写した上に IME セクションを差し込みます:
 
 ```lua
-require("ime-status").setup()
-vim.o.statusline = "%{v:lua.require'ime-status'.get()} %f"
+{
+  "echasnovski/mini.statusline",
+  dependencies = { "s4ng/ime-status.nvim" },
+  config = function()
+    local MiniStatusline = require("mini.statusline")
+    MiniStatusline.setup({
+      content = {
+        active = function()
+          local mode, mode_hl = MiniStatusline.section_mode({ trunc_width = 120 })
+          local git = MiniStatusline.section_git({ trunc_width = 40 })
+          local diagnostics = MiniStatusline.section_diagnostics({ trunc_width = 75 })
+          local filename = MiniStatusline.section_filename({ trunc_width = 140 })
+          local location = MiniStatusline.section_location({ trunc_width = 75 })
+          return MiniStatusline.combine_groups({
+            { hl = mode_hl, strings = { mode } },
+            { hl = "MiniStatuslineDevinfo", strings = { git, diagnostics } },
+            "%<",
+            { hl = "MiniStatuslineFilename", strings = { filename } },
+            "%=",
+            { hl = "MiniStatuslineFileinfo", strings = { require("ime-status").component() } },
+            { hl = mode_hl, strings = { location } },
+          })
+        end,
+      },
+    })
+  end,
+}
 ```
 
-ラベルが変わるたびに `User IMEStatusChanged` autocmd が発火するので、イベント駆動の
-ステータスラインは正確なタイミングで更新できます。
+### heirline
+
+heirline はコンポーネントの `update` に挙げたイベントでしか再評価しません。
+そこにプラグイン自身のイベントを指定すれば済みます — ほかの何かが再描画する
+必要はありません:
+
+```lua
+local IME = {
+  provider = function()
+    return " " .. require("ime-status").component() .. " "
+  end,
+  update = { "User", pattern = "IMEStatusChanged" },
+}
+
+require("heirline").setup({
+  statusline = { Mode, Space, FileName, Align, IME, Ruler },
+})
+```
+
+AstroNvim のステータスラインも中身は heirline なので、同じ形になります。
+
+### lightline.vim
+
+lightline のコンポーネントは Vimscript の関数なので、`luaeval()` 経由でゲッターに
+到達します:
+
+```lua
+vim.cmd([[
+  function! IMEStatusLightline() abort
+    return luaeval("require('ime-status').component()")
+  endfunction
+]])
+
+vim.g.lightline = {
+  active = {
+    left = { { "mode", "paste" }, { "readonly", "filename", "modified" } },
+    right = { { "lineinfo" }, { "percent" }, { "ime", "filetype" } },
+  },
+  component_function = { ime = "IMEStatusLightline" },
+}
+```
+
+### ネイティブ statusline、そのほか
+
+```lua
+vim.o.statusline = " %f %m%r%=[%{v:lua.require'ime-status'.component()}] %l:%c "
+```
+
+再描画のたびに `&statusline` を評価し直すステータスラインなら、これだけで十分です
+— 再描画の要求はプラグインが出しています。結果をキャッシュする側（上の lualine と
+heirline）には `User IMEStatusChanged` autocmd が必要です。
 
 ## 設定
 
