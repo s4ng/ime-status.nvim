@@ -54,10 +54,12 @@ sources only — selecting a source that is installed but not enabled returns
 
 - There is no hidden conversion mode to read, unlike Windows: on macOS the 한/영
   key switches the input *source* itself, so the id always tells the whole story.
-- `latin_source` defaults to `com.apple.keylayout.ABC`. That is a guess, not a
-  lookup — on Dvorak, Colemak or a national latin layout it rewrites your layout
-  on every `InsertLeave`, and if ABC is not among your enabled sources the switch
-  fails outright. Set `latin_source` to the id you actually use.
+- With no `latin_source` set, `auto_switch` returns to **the last
+  `com.apple.keylayout.*` source it saw you in** — so Dvorak, Colemak and the
+  national latin layouts survive. `com.apple.keylayout.ABC` is only the fallback
+  for before any latin source has been observed, and it is a guess, not a
+  lookup: if ABC is not among your *enabled* sources, selecting it fails
+  outright. Set `latin_source` explicitly to skip both.
 - The Chinese input methods are named after the mode rather than the language
   (`SCIM` = simplified, `TCIM` = traditional), which is why the default label
   rules match those strings directly.
@@ -92,7 +94,13 @@ Switching accepts a language-ish string (turn the IME on), a bare number
 (im-select-style locale id, requests a layout switch), or anything else (latin:
 close the IME / clear native conversion mode). `latin_source` defaults to the
 symbolic `"en"`, which clears the conversion mode **without** changing your
-keyboard layout.
+keyboard layout — a better answer than any id worth remembering, so this backend
+is the one place `auto_switch` does not learn from what it sees.
+
+The im-select fallback is the exception. Its vocabulary is bare numeric locale
+ids (`1033`, `1042`) that differ per machine, so nothing sensible can be guessed
+in advance and `auto_switch` used to do nothing at all there. It now returns to
+the last numeric id that resolved to `default`.
 
 **Cost per poll:** a few in-process C calls (the `WM_IME_CONTROL` sends use
 `SMTO_ABORTIFHUNG`, so a wedged IME cannot block the editor).
@@ -133,7 +141,10 @@ socket at all — there is no address to dial.
 | Latin id         | `keyboard-us`                             | `xkb:us::eng`                                             |
 
 The two latin ids are not interchangeable — handing one daemon the other's id is
-a silent no-op — so `latin_source` follows whichever daemon answered.
+a silent no-op — so `latin_source` follows whichever daemon answered. Those two
+are the fallback; where a latin layout has already been observed (`keyboard-*`
+on fcitx5, `xkb:*` on ibus) `auto_switch` returns to that one instead, which is
+what keeps a `keyboard-de` or `xkb:dvorak` user on their own layout.
 
 ### Why only one of them is polled
 
@@ -250,6 +261,16 @@ require("ime-status").setup({
 
 `get()` never blocks on any of them: it returns the cached label, and refreshing
 happens asynchronously.
+
+**When a sample is taken.** The `interval` timer, and the mode and focus
+autocmds. `InsertEnter` and `InsertLeave` own the insert transitions; the
+`ModeChanged` handler skips those, so an insert round trip costs two samples
+rather than four. `insert_only` gates every one of these paths except
+`InsertEnter` itself, which is the one moment the option most wants a fresh
+value — and where `mode()` may still report the outgoing mode.
+
+`auto_switch` costs a *write* on top: one per `InsertLeave` and per focus gained
+in normal mode, skipped when the source read back is already the latin one.
 
 ---
 

@@ -214,17 +214,50 @@ function M.set_cmd(id)
   return vim.list_extend({ t.exe }, t.set(id))
 end
 
--- A sensible default "latin / english" input-source id per OS, used by
--- auto_switch when the user did not set `latin_source`. Returns nil on Windows
--- without the FFI backend because im-select expects a locale id (e.g. "1033")
--- that varies per machine.
+-- True when `raw` names a plain keyboard layout rather than an input method
+-- with a native conversion mode — that is, a source auto_switch can return to
+-- without swallowing normal-mode keys. init.lua remembers the last one it sees
+-- and prefers it over the guess below.
 --
--- The macOS id is a guess, not a lookup: on Dvorak, Colemak or a national latin
--- layout this rewrites the layout on every InsertLeave, and if ABC is not among
--- the *enabled* sources the switch simply fails. Set `latin_source` to work
--- around it. The real fix is to remember the last non-CJK source seen and return
--- to that — the inverse of `saved_source` in init.lua — which is cheap now that
--- the FFI backend makes reading the current source free.
+-- The test is structural, per OS, because each backend has its own id
+-- vocabulary. It is deliberately *not* "no label rule matched": the rules leave
+-- `rime` unmatched on purpose — a schema engine used for Chinese, Japanese and
+-- Korean alike, so its name says nothing — and reading that as latin would make
+-- auto_switch switch *into* it. Anything unrecognised is not latin, so a miss
+-- costs a fallback to default_latin(), never a switch into the wrong source.
+---@param raw string|nil
+---@return boolean
+function M.is_latin(raw)
+  if not raw or raw == "" then
+    return false
+  end
+  local low = raw:lower()
+  if is_mac then
+    -- com.apple.keylayout.* is a layout; an input method is
+    -- com.apple.inputmethod.* — the two namespaces do not overlap.
+    return low:find("com.apple.keylayout.", 1, true) == 1
+  elseif is_win then
+    -- The FFI backend already has a better answer than any id we could
+    -- remember: "en" clears the conversion mode without touching the layout,
+    -- and every latin-mode id it reports ("en-US", "ko-KR") means exactly that
+    -- when handed back to set(). im-select is the case worth remembering — its
+    -- vocabulary is bare numeric locale ids, which is precisely what
+    -- default_latin() cannot guess, so auto_switch did nothing at all there.
+    return not M.native() and low:match("^%d+$") ~= nil
+  end
+  -- fcitx5 spells its layouts "keyboard-us", ibus spells them "xkb:us::eng".
+  return low:find("keyboard-", 1, true) == 1 or low:find("xkb:", 1, true) == 1
+end
+
+-- The fallback "latin / english" input-source id per OS, used by auto_switch
+-- when the user set no `latin_source` and no latin source has been observed yet
+-- (see M.is_latin). Returns nil on Windows without the FFI backend because
+-- im-select expects a locale id (e.g. "1033") that varies per machine.
+--
+-- The macOS id is a guess, not a lookup, and it is only ever right for someone
+-- on ABC: on Dvorak, Colemak or a national latin layout it rewrites the layout,
+-- and if ABC is not among the *enabled* sources the switch fails silently.
+-- Which is why it is now the last resort rather than the answer.
 ---@return string|nil
 function M.default_latin()
   if is_mac then

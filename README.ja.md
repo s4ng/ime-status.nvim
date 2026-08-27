@@ -47,7 +47,9 @@ OS が管理しているためです。このプラグインは現在の入力�
 ```
 
 `opts` はそのまま `setup()` に渡されます。ポーリングタイマーを開始するのは
-`setup()` なので、必ず一度は呼び出される必要があります。上の 2 つのオプションは
+`setup()` なので、必ず一度は呼び出される必要があります。2 回目以降の呼び出しは
+無視されずオプションを再マージするので、このプラグインを設定する 2 つのスペックが
+互いの設定を黙って打ち消し合うことはありません。上の 2 つのオプションは
 既定では*オフ*です。それぞれの働きと、入力を再開したときに直前の入力メソッドへ
 戻す方法は
 [自動切り替え](#自動切り替え--ノーマルモードで-jk-がかなで入力される問題を解決)
@@ -200,7 +202,7 @@ require("ime-status").setup({
 
   -- 自動切り替え（下記参照）— すべてデフォルト off
   auto_switch = false,         -- InsertLeave / ノーマルモードでのフォーカス時に latin_source へ強制切り替え
-  latin_source = nil,          -- 切り替え先の id; nil = OS デフォルト（macOS: com.apple.keylayout.ABC）
+  latin_source = nil,          -- 切り替え先の id; nil = 最後に使っていたラテン配列
   restore_on_insert = false,   -- InsertEnter 時に、自動切り替え直前の IME を復元
   pause_on_focus_lost = false, -- Neovim / ターミナルが非フォーカスのときポーリングを停止
 })
@@ -231,10 +233,14 @@ require("ime-status").setup({
 })
 ```
 
-- `latin_source` のデフォルトは OS のラテン配列です（macOS `com.apple.keylayout.ABC`、
-  Linux は fcitx5 なら `keyboard-us`、ibus なら `xkb:us::eng`、Windows `"en"` — FFI
-  バックエンドはキーボード配列を変えずに IME だけを英数モードへ切り替えます）。Linux の
-  二つの id 体系は互換ではないため、実際に応答するバックエンドに合わせて決まります。
+- `latin_source` を `nil` のままにすると、**最後に使っていたラテン配列**へ戻ります。
+  ポーリングの過程でその配列を覚えているので、Dvorak や Colemak、各国のラテン配列が
+  上書きされることはありません。まだ一度も観測していない場合にだけ OS のデフォルトへ
+  フォールバックします（macOS `com.apple.keylayout.ABC`、Linux は fcitx5 なら
+  `keyboard-us`、ibus なら `xkb:us::eng`、Windows `"en"` — FFI バックエンドはキーボード
+  配列を変えずに IME だけを英数モードへ切り替えます）。Linux の二つの id 体系は互換では
+  ないため、そのフォールバックは実際に応答するバックエンドに合わせて決まります。固定
+  したい場合は `latin_source` を明示してください。
 - `restore_on_insert` は挿入中に使っていた IME を記憶し、次の `InsertEnter` で
   復元します — CJK を入力するバッファに便利です。
 - `pause_on_focus_lost = true` は Neovim が非フォーカスの間ポーリングタイマーを

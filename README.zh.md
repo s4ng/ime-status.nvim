@@ -44,7 +44,8 @@ lualine 只是下面示例之一。
 }
 ```
 
-`opts` 会直接传给 `setup()`。启动轮询定时器的正是 `setup()`，因此它必须被调用一次。
+`opts` 会直接传给 `setup()`。启动轮询定时器的正是 `setup()`，因此它必须被调用一次 ——
+再次调用不会被忽略，而是重新合并选项，因此两份都配置本插件的 spec 不会悄悄地互相覆盖。
 上面这两个选项默认都是*关闭*的；它们各自做什么，以及如何让重新输入时回到你上次用的
 输入法，见[自动切换](#自动切换--解决普通模式下-jk-被输入成中文韩文的问题)。
 
@@ -188,7 +189,7 @@ require("ime-status").setup({
 
   -- 自动切换（见下文）—— 全部默认关闭
   auto_switch = false,         -- 在 InsertLeave / 普通模式下获得焦点时强制切换到 latin_source
-  latin_source = nil,          -- 要切换到的 id；nil = 操作系统默认值（macOS: com.apple.keylayout.ABC）
+  latin_source = nil,          -- 要切换到的 id；nil = 你上次使用的拉丁键盘布局
   restore_on_insert = false,   -- 进入插入模式时，恢复自动切换之前使用的 IME
   pause_on_focus_lost = false, -- 当 Neovim / 终端失去焦点时停止轮询
 })
@@ -218,10 +219,12 @@ require("ime-status").setup({
 })
 ```
 
-- `latin_source` 默认为操作系统的拉丁键盘布局（macOS `com.apple.keylayout.ABC`，
+- `latin_source` 保持 `nil` 时，会切回**你上次使用的拉丁键盘布局** —— 插件在轮询过程中
+  记住它，因此 Dvorak、Colemak 以及各国的拉丁布局不会被覆盖，而是被恢复。只有在还没有
+  观测到任何拉丁输入源时，才回退到操作系统默认值（macOS `com.apple.keylayout.ABC`，
   Linux 在 fcitx5 上是 `keyboard-us`、在 ibus 上是 `xkb:us::eng`，Windows `"en"` ——
   FFI 后端在不改变键盘布局的情况下仅将 IME 切换到英文模式）。Linux 的两套 id 并不通用，
-  因此默认值取决于实际应答的后端。
+  因此该回退值取决于实际应答的后端。想固定下来就显式设置 `latin_source`。
 - `restore_on_insert` 会记住插入期间使用的 IME，并在下一次 `InsertEnter` 时恢复 ——
   对需要输入 CJK 的缓冲区很方便。
 - `pause_on_focus_lost = true` 会在 Neovim 失去焦点时停止轮询定时器（在 `FocusGained`

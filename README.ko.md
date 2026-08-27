@@ -46,7 +46,9 @@ Neovim 자체는 OS의 IME 상태를 알지 못합니다 — 한/영 전환은 �
 ```
 
 `opts`는 그대로 `setup()`에 전달됩니다. 폴링 타이머를 시작하는 것이 `setup()`
-이므로, 반드시 한 번은 호출되어야 합니다. 위 두 옵션의 기본값은 *꺼짐*입니다 —
+이므로, 반드시 한 번은 호출되어야 합니다 — 그리고 두 번째 호출은 무시되지 않고
+옵션을 다시 병합하므로, 이 플러그인을 함께 설정하는 두 스펙이 서로의 설정을 조용히
+지워버리는 일은 없습니다. 위 두 옵션의 기본값은 *꺼짐*입니다 —
 각각 무엇을 하는지, 그리고 입력을 시작할 때 쓰던 입력기로 되돌아오게 하는
 방법은 [자동 전환](#자동-전환--노멀-모드에서-jk가-한글로-입력되는-문제-해결)
 절을 보세요.
@@ -193,7 +195,7 @@ require("ime-status").setup({
 
   -- 자동 전환 (아래 설명) — 전부 기본 off
   auto_switch = false,         -- InsertLeave / 노멀 모드 포커스 시 latin_source로 강제 전환
-  latin_source = nil,          -- 전환할 id; nil = OS 기본값 (macOS: com.apple.keylayout.ABC)
+  latin_source = nil,          -- 전환할 id; nil = 마지막으로 쓰던 영문 레이아웃
   restore_on_insert = false,   -- InsertEnter 시, 자동 전환 직전 쓰던 IME로 복원
   pause_on_focus_lost = false, -- Neovim / 터미널이 비포커스일 때 폴링 중단
 })
@@ -223,10 +225,14 @@ require("ime-status").setup({
 })
 ```
 
-- `latin_source`의 기본값은 OS 영문 레이아웃입니다 (macOS `com.apple.keylayout.ABC`,
-  Linux는 fcitx5 `keyboard-us` / ibus `xkb:us::eng`, Windows `"en"` — FFI 백엔드가
-  키보드 레이아웃은 유지한 채 IME만 영문 모드로 전환합니다). Linux의 두 id 체계는
-  서로 호환되지 않으므로, 실제로 응답하는 백엔드에 맞춰 기본값이 정해집니다.
+- `latin_source`를 `nil`로 두면 **마지막으로 쓰던 영문 레이아웃**으로 돌아갑니다.
+  폴링하면서 그 값을 기억해 두므로 Dvorak, Colemak, 각국 라틴 레이아웃이 덮어쓰이지
+  않고 그대로 복원됩니다. 아직 한 번도 관측하지 못했을 때만 OS 기본값으로 폴백합니다
+  (macOS `com.apple.keylayout.ABC`, Linux는 fcitx5 `keyboard-us` / ibus
+  `xkb:us::eng`, Windows `"en"` — FFI 백엔드가 키보드 레이아웃은 유지한 채 IME만
+  영문 모드로 전환합니다). Linux의 두 id 체계는 서로 호환되지 않으므로, 그 폴백은
+  실제로 응답하는 백엔드에 맞춰 정해집니다. 고정하고 싶으면 `latin_source`를 직접
+  지정하세요.
 - `restore_on_insert`는 인서트 중 쓰던 IME를 기억했다가 다음 `InsertEnter`에서
   복원합니다 — 한글을 자주 입력하는 버퍼에 유용합니다.
 - `pause_on_focus_lost = true`는 Neovim이 비포커스일 때 폴링 타이머를 멈춥니다

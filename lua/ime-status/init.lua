@@ -17,6 +17,9 @@ local started = false
 -- IME that was active just before the last auto-switch to latin; restored on
 -- the next InsertEnter when restore_on_insert is enabled.
 local saved_source = nil
+-- Latin source the user was last actually in — the inverse of saved_source, and
+-- what auto_switch returns to. nil until one is observed.
+local latin_seen = nil
 
 -- Map a raw backend id (e.g. "com.apple.inputmethod.Korean.2SetKorean",
 -- "hangul") to its display label using the ordered rules in config.
@@ -36,8 +39,29 @@ local function resolve(raw)
   return opts.default
 end
 
+-- Remember `raw` if it is a latin source we could safely return to later.
+--
+-- Two tests, not one. `backend.is_latin` knows each OS's id vocabulary and is
+-- what keeps an unlabelled *CJK* engine out of here; the label check then keeps
+-- out anything the user's own `labels` rules consider non-latin, since they get
+-- the last word on what the statusline calls it.
+---@param raw string|nil
+local function note_latin(raw)
+  if backend.is_latin(raw) and resolve(raw) == config.options.default then
+    latin_seen = raw
+  end
+end
+
+-- Where auto_switch sends the IME. An explicit `latin_source` wins; otherwise
+-- return to the latin source the user was last in, and only guess when none has
+-- been seen yet.
+--
+-- Returning to the observed source is the whole point: the guess is
+-- `com.apple.keylayout.ABC` on macOS, so before this every InsertLeave rewrote a
+-- Dvorak, Colemak or national latin layout to ABC — and failed silently when ABC
+-- was not among the enabled sources.
 local function latin_source()
-  return config.options.latin_source or backend.default_latin()
+  return config.options.latin_source or latin_seen or backend.default_latin()
 end
 
 -- True when polling should run right now. With `insert_only`, we skip work
@@ -47,6 +71,25 @@ local function should_poll()
     return true
   end
   return vim.fn.mode():sub(1, 1) == "i"
+end
+
+-- True for the mode names InsertEnter/InsertLeave already fire on — Replace
+-- mode included, since those autocmds cover it too.
+---@param mode string|nil  A `v:event` mode name from ModeChanged
+---@return boolean
+local function insert_ish(mode)
+  local c = (mode or ""):sub(1, 1)
+  return c == "i" or c == "R"
+end
+
+-- Refresh, but only when polling is wanted right now. `should_poll` used to be
+-- consulted by the timer alone, so `insert_only` throttled the timer and nothing
+-- else: a mode change or a focus gained still sampled the IME in normal mode,
+-- which is exactly the work the option asks us not to do.
+local function poll()
+  if should_poll() then
+    M.refresh()
+  end
 end
 
 -- Fetch the current raw id and hand it to `cb` (nil on failure). `cb` may run
@@ -71,6 +114,7 @@ function M.refresh()
   fetch(function(raw)
     M.raw = raw
     local label = resolve(raw)
+    note_latin(raw)
     vim.schedule(function()
       if M.state ~= label then
         M.state = label
@@ -122,11 +166,7 @@ local function start_polling()
   timer:start(
     config.options.interval,
     config.options.interval,
-    vim.schedule_wrap(function()
-      if should_poll() then
-        M.refresh()
-      end
-    end)
+    vim.schedule_wrap(poll)
   )
 end
 
@@ -138,10 +178,29 @@ local function stop_polling()
   end
 end
 
+-- Pick up a changed `interval`: the timer was started with the old one.
+local function restart_polling()
+  stop_polling()
+  start_polling()
+end
+
 ---@param opts table|nil  See IMEStatusConfig
 ---@return table
 function M.setup(opts)
   if started then
+    -- A second call used to drop `opts` on the floor without a word. Plugin
+    -- managers make that easy to hit — a spec with `opts` alongside a `config`
+    -- that calls setup() itself, or two plugins each depending on this one —
+    -- and whichever call lost the race silently lost the user's whole
+    -- configuration. Re-merge instead.
+    --
+    -- An empty second call is left alone on purpose: a bare setup() from
+    -- somebody else's dependency spec must not reset the options to defaults.
+    if opts and next(opts) ~= nil then
+      config.setup(opts)
+      restart_polling()
+      M.refresh()
+    end
     return M
   end
   started = true
@@ -151,7 +210,10 @@ function M.setup(opts)
   -- can be found right now. Detection is resolved lazily per call and re-probed
   -- periodically, so a missing tool means "silently does nothing for now"
   -- rather than "permanently disabled for this session". Never error.
-  local o = config.options
+  --
+  -- The callbacks below read `config.options` on every call rather than closing
+  -- over it: config.setup() installs a *new* table, so a captured one would go
+  -- stale the moment setup() is called a second time.
   M.refresh()
   start_polling()
 
@@ -160,9 +222,13 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("InsertEnter", {
     group = group,
     callback = function()
+      local o = config.options
       if o.auto_switch and o.restore_on_insert and saved_source then
         set_source(saved_source)
       else
+        -- Unconditional, not poll(): entering insert is the one sample
+        -- `insert_only` definitely wants, and mode() can still report the
+        -- outgoing mode here, which would make should_poll() skip it.
         M.refresh()
       end
     end,
@@ -171,15 +237,23 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("InsertLeave", {
     group = group,
     callback = function()
+      local o = config.options
       if not o.auto_switch then
-        M.refresh()
+        poll()
         return
       end
       -- Remember the IME used during insert, then force latin so normal-mode
       -- motions (j/k/...) are never swallowed by a CJK input method.
       fetch(function(raw)
+        note_latin(raw)
         local latin = latin_source()
-        if o.restore_on_insert and raw and raw ~= latin then
+        if raw and raw == latin then
+          -- Already latin — typing never left it. Switching to the source we
+          -- are in is an OS call for nothing.
+          vim.schedule(poll)
+          return
+        end
+        if o.restore_on_insert and raw then
           saved_source = raw
         end
         vim.schedule(switch_to_latin)
@@ -190,13 +264,24 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("ModeChanged", {
     group = group,
     callback = function()
-      M.refresh()
+      -- InsertEnter/InsertLeave own the insert transitions (Replace mode
+      -- included — it fires those too). Handling them here as well meant two
+      -- refreshes per transition, and under auto_switch it was worse than
+      -- wasteful: this one raced InsertLeave's fetch -> set -> refresh and
+      -- cached the pre-switch IME, so the label flashed 한 before correcting
+      -- itself to EN.
+      local e = vim.v.event
+      if insert_ish(e.old_mode) or insert_ish(e.new_mode) then
+        return
+      end
+      poll()
     end,
   })
 
   vim.api.nvim_create_autocmd("FocusGained", {
     group = group,
     callback = function()
+      local o = config.options
       if o.pause_on_focus_lost then
         start_polling()
       end
@@ -205,7 +290,7 @@ function M.setup(opts)
       if o.auto_switch and vim.fn.mode():sub(1, 1) ~= "i" then
         switch_to_latin()
       else
-        M.refresh()
+        poll()
       end
     end,
   })
@@ -213,7 +298,7 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("FocusLost", {
     group = group,
     callback = function()
-      if o.pause_on_focus_lost then
+      if config.options.pause_on_focus_lost then
         stop_polling()
       end
     end,

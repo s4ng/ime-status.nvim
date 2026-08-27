@@ -48,7 +48,9 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```
 
 `opts` is passed straight to `setup()`. Calling `setup()` is what starts the
-polling timer, so it must run once. Both options above ship *off*; see
+polling timer, so it must run once — and calling it again re-merges rather than
+being ignored, so two specs that both configure this plugin cannot silently
+cancel each other out. Both options above ship *off*; see
 [Auto-switch](#auto-switch--stop-normal-mode-jk-from-typing-한글) for what they
 do and how to have typing resume in the IME you left.
 
@@ -198,7 +200,7 @@ require("ime-status").setup({
 
   -- auto-switch (see below) — all default off
   auto_switch = false,         -- on InsertLeave / focusing in normal mode, force latin_source
-  latin_source = nil,          -- id to switch to; nil = OS default (macOS: com.apple.keylayout.ABC)
+  latin_source = nil,          -- id to switch to; nil = the latin layout you were last in
   restore_on_insert = false,   -- on InsertEnter, restore the IME used before the auto-switch
   pause_on_focus_lost = false, -- stop polling while Neovim / the terminal is unfocused
 })
@@ -229,11 +231,14 @@ require("ime-status").setup({
 })
 ```
 
-- `latin_source` defaults to the OS latin layout (macOS `com.apple.keylayout.ABC`,
-  Linux fcitx5 `keyboard-us` / ibus `xkb:us::eng`, Windows `"en"` — the FFI
-  backend switches the IME to latin mode without changing the keyboard layout).
-  The two Linux vocabularies are not interchangeable, so the default follows
-  whichever backend answers.
+- `latin_source` left at `nil` means **the latin layout you were last in** — the
+  plugin remembers it as it polls, so Dvorak, Colemak and the national latin
+  layouts are returned to rather than overwritten. Only before it has seen one
+  does it fall back to an OS default (macOS `com.apple.keylayout.ABC`, Linux
+  fcitx5 `keyboard-us` / ibus `xkb:us::eng`, Windows `"en"` — the FFI backend
+  switches the IME to latin mode without changing the keyboard layout). The two
+  Linux vocabularies are not interchangeable, so that fallback follows whichever
+  backend answers. Set `latin_source` explicitly to pin it.
 - `restore_on_insert` remembers the IME active during insert and restores it on
   the next `InsertEnter` — handy for buffers you write CJK in.
 - `pause_on_focus_lost = true` stops the polling timer while Neovim is

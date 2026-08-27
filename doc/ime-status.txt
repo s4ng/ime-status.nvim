@@ -75,6 +75,12 @@ Call setup() once (this starts the polling timer): >lua
 With lazy.nvim, the same table as `opts = { ... }` does this for you. Both
 options above ship off; |ime-status-config| says what each one does.
 
+Calling setup() again re-merges: the timer and the autocmds are set up once,
+but a later call with options applies them, so two plugin specs that both
+configure this one cannot silently cancel each other out. A later call with
+*no* options is ignored rather than treated as a reset — somebody else's bare
+setup() must not wipe your configuration.
+
 STATUSLINE INTEGRATION                                  *ime-status-statusline*
 
 |ime-status.component| is the thing to wire in. It reads a cache and never
@@ -111,7 +117,9 @@ interval     (number, default 300)
              Polling interval in milliseconds.
 
 insert_only  (boolean, default false)
-             Only poll while in insert mode.
+             Only poll while in insert mode. This gates the timer and the mode
+             and focus autocmds alike; InsertEnter always samples, since that
+             is the moment the value is about to matter.
 
 tool         (string|nil, default nil)
              Opt out of the native backend: name or absolute path of an
@@ -158,12 +166,23 @@ auto_switch  (boolean, default false)
              by a CJK input method.
 
 latin_source (string|nil, default nil)
-             Input-source id auto_switch switches to. nil = OS default
-             (macOS com.apple.keylayout.ABC, Linux keyboard-us on fcitx5
-             or xkb:us::eng on ibus, Windows "en" — the FFI backend flips
-             the IME to latin mode without changing the keyboard layout).
-             The two Linux vocabularies are not interchangeable, so the
-             default follows whichever backend answers.
+             Input-source id auto_switch switches to. When nil, auto_switch
+             returns to the last latin source it saw you in — the keyboard
+             layout you actually use, so Dvorak, Colemak and the national
+             latin layouts are not rewritten. Only until one has been seen
+             does it fall back to an OS default (macOS
+             com.apple.keylayout.ABC, Linux keyboard-us on fcitx5 or
+             xkb:us::eng on ibus, Windows "en" — the FFI backend flips the
+             IME to latin mode without changing the keyboard layout). The two
+             Linux vocabularies are not interchangeable, so that fallback
+             follows whichever backend answers.
+
+             What counts as latin is decided per backend, by id namespace
+             (com.apple.keylayout.* on macOS, keyboard-* or xkb:* on Linux),
+             not by "no label rule matched" — otherwise `rime`, left
+             unmatched on purpose because it types Chinese, Japanese and
+             Korean alike, would read as latin and auto_switch would switch
+             into it.
 
 restore_on_insert  (boolean, default false)
              On InsertEnter, restore the IME that was active before the last
