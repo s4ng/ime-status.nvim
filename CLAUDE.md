@@ -49,6 +49,7 @@ nvim --headless -l test/dbus_spec.lua           # D-Bus codec, golden bytes
 nvim --headless -l test/dbus_transport_spec.lua # D-Bus stream, against a fake bus
 nvim --headless -l test/health_spec.lua         # :checkhealth diagnosis
 nvim --headless -l test/label_spec.lua          # raw id -> label, all four OSes
+nvim --headless -l test/switch_spec.lua         # auto_switch target, sample counts
 ```
 
 Each prints `ok` and exits non-zero on failure. They all run on any OS: the
