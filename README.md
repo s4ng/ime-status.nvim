@@ -11,26 +11,25 @@
 Show the current keyboard input method (한 / EN / あ / 中 …) in your Neovim
 statusline.
 
-Neovim itself has no idea which IME the OS is in — 한/영 switching is handled by
-the operating system, not the editor. This plugin reads the current input source
-straight from the OS, **caches** the result, refreshes it asynchronously on a
-timer and on mode changes, and exposes a fast getter you can drop into any
-statusline. It is **not** lualine-specific; lualine is just one of the examples
-below.
+Neovim has no idea which IME the OS is in. The operating system handles 한/영
+switching, and nothing tells the editor about it. This plugin reads the current
+input source straight from the OS, **caches** the result, refreshes it
+asynchronously on a timer and on mode changes, and exposes a fast getter you can
+drop into any statusline. Five statuslines appear in the examples below.
 
 ## Requirements
 
-**Just Neovim.** No companion binary to install, nothing to find on `PATH` — the
-plugin reads the input method in-process on every supported OS.
+**Neovim, and nothing else.** No companion binary to install, nothing to find on
+`PATH`. The plugin reads the input method in-process on every supported OS.
 
-| OS      | How it reads the IME                                          |
-| ------- | ------------------------------------------------------------- |
-| macOS   | Carbon TIS, through the built-in LuaJIT FFI                   |
-| Windows | user32/imm32, through the built-in LuaJIT FFI                 |
-| Linux   | D-Bus, straight to fcitx5 or ibus — plain Lua, no FFI         |
+| OS      | How it reads the IME                             |
+| ------- | ------------------------------------------------ |
+| macOS   | Carbon TIS, through the built-in LuaJIT FFI      |
+| Windows | user32/imm32, through the built-in LuaJIT FFI    |
+| Linux   | D-Bus to fcitx5 or ibus, in plain Lua (no FFI)   |
 
-See [**doc/backends.md**](doc/backends.md) for what each backend actually does,
-what a poll costs on it, and the caveats that belong to each input method.
+See [**doc/backends.md**](doc/backends.md) for how each backend works, what a
+poll costs on it, and the caveats that belong to each input method.
 
 ## Install
 
@@ -47,22 +46,22 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-`opts` is passed straight to `setup()`. Calling `setup()` is what starts the
-polling timer, so it must run once — and calling it again re-merges rather than
-being ignored, so two specs that both configure this plugin cannot silently
-cancel each other out. Both options above ship *off*; see
-[Auto-switch](#auto-switch--stop-normal-mode-jk-from-typing-한글) for what they
-do and how to have typing resume in the IME you left.
+`opts` goes straight to `setup()`. Calling `setup()` starts the polling timer,
+so it has to run once. A second call re-merges its options, so two specs that
+both configure this plugin will not cancel each other out. Both options above
+ship *off*; see
+[Auto-switch](#auto-switch-stop-normal-mode-jk-from-typing-한글) for what they do
+and how to have typing resume in the IME you left.
 
 ## Statusline integration
 
 The plugin is statusline-agnostic. `require("ime-status").component()` returns
-the current label, already passed through `format`, and never blocks — it reads
-a cache, so calling it on every redraw costs nothing. When the label changes the
-plugin calls `redrawstatus` and fires a `User IMEStatusChanged` autocmd, which
-is what the event-driven statuslines below hang off.
+the current label, already passed through `format`. It never blocks, because it
+reads a cache, so calling it on every redraw costs nothing. When the label
+changes the plugin calls `redrawstatus` and fires a `User IMEStatusChanged`
+autocmd. The event-driven statuslines below hang off that autocmd.
 
-Each snippet below assumes the spec above is already installed, and only adds
+Each snippet below assumes the spec above is already installed, and adds only
 the component.
 
 ### lualine
@@ -126,7 +125,7 @@ section goes into a copy of mini's own default layout:
 ### heirline
 
 heirline re-evaluates a component only on the events its `update` field names,
-so point that at the plugin's own event — nothing else has to redraw for it:
+so point that at the plugin's own event. Nothing else has to redraw for it:
 
 ```lua
 local IME = {
@@ -172,8 +171,8 @@ vim.o.statusline = " %f %m%r%=[%{v:lua.require'ime-status'.component()}] %l:%c "
 ```
 
 Any statusline that re-evaluates `&statusline` on redraw needs nothing more:
-the plugin already asks for the redraw. One that caches instead — lualine and
-heirline above — wants the `User IMEStatusChanged` autocmd.
+the plugin already asks for the redraw. One that caches instead (lualine and
+heirline above) wants the `User IMEStatusChanged` autocmd.
 
 ## Configuration
 
@@ -198,7 +197,7 @@ require("ime-status").setup({
   unknown = "?",         -- shown when the backend returns nothing
   format = function(label) return label end,
 
-  -- auto-switch (see below) — all default off
+  -- auto-switch (see below), all default off
   auto_switch = false,         -- on InsertLeave / focusing in normal mode, force latin_source
   latin_source = nil,          -- id to switch to; nil = the latin layout you were last in
   restore_on_insert = false,   -- on InsertEnter, restore the IME used before the auto-switch
@@ -206,23 +205,22 @@ require("ime-status").setup({
 })
 ```
 
-Most of the default rules are *engine* names, not language names, because that
-is what the backends report. On Linux the raw id is whatever the input method
-calls itself, and not one Japanese engine — `anthy`, `mozc`, `kkc`, `skk` — has
-"japanese" anywhere in it. Supplying your own `labels` replaces the list
-wholesale, so keep the entries you still want.
+Most default rules match *engine* names, because that is what the backends
+report. On Linux the raw id is whatever the input method calls itself, and no
+Japanese engine (`anthy`, `mozc`, `kkc`, `skk`) carries "japanese" in its name.
+Supplying your own `labels` replaces the list wholesale, so keep the entries you
+still want.
 
 If an engine shows as `EN` while it is active, run `:IMEStatusReload` and check
 what id it reports (`:lua print(require("ime-status").raw)`), then add a rule for
-it — a bug report with that id is welcome too.
+it. A bug report with that id is welcome too.
 
-### Auto-switch — stop normal-mode `j`/`k` from typing 한글
+### Auto-switch: stop normal-mode `j`/`k` from typing 한글
 
 If you keep an always-on Neovim buffer and jump in to press `j`/`k`, a leftover
 Korean IME turns those into `ㅓ`/`ㅏ` and motions break. `auto_switch = true`
-fixes the cause rather than just displaying it: it forces the IME to
-`latin_source` whenever you leave insert mode or focus the window in normal
-mode, so normal-mode keys always work.
+fixes the cause: it forces the IME to `latin_source` whenever you leave insert
+mode or focus the window in normal mode, so normal-mode keys keep working.
 
 ```lua
 require("ime-status").setup({
@@ -231,16 +229,16 @@ require("ime-status").setup({
 })
 ```
 
-- `latin_source` left at `nil` means **the latin layout you were last in** — the
-  plugin remembers it as it polls, so Dvorak, Colemak and the national latin
-  layouts are returned to rather than overwritten. Only before it has seen one
-  does it fall back to an OS default (macOS `com.apple.keylayout.ABC`, Linux
-  fcitx5 `keyboard-us` / ibus `xkb:us::eng`, Windows `"en"` — the FFI backend
-  switches the IME to latin mode without changing the keyboard layout). The two
-  Linux vocabularies are not interchangeable, so that fallback follows whichever
-  backend answers. Set `latin_source` explicitly to pin it.
+- `latin_source` left at `nil` means **the latin layout you were last in**. The
+  plugin remembers it as it polls, so your Dvorak, Colemak or national latin
+  layout survives. Before it has seen one, it falls back to an OS default (macOS
+  `com.apple.keylayout.ABC`, Linux fcitx5 `keyboard-us` / ibus `xkb:us::eng`,
+  Windows `"en"`, which flips the IME to latin mode without changing the
+  keyboard layout). The two Linux vocabularies are not interchangeable, so that
+  fallback follows whichever backend answers. Set `latin_source` explicitly to
+  pin it.
 - `restore_on_insert` remembers the IME active during insert and restores it on
-  the next `InsertEnter` — handy for buffers you write CJK in.
+  the next `InsertEnter`, which helps in buffers you write CJK in.
 - `pause_on_focus_lost = true` stops the polling timer while Neovim is
   unfocused (it resumes, and refreshes, on `FocusGained`) to save battery.
 
@@ -254,32 +252,31 @@ end
 
 ## Notes & tradeoffs
 
-- **Polling, and where it is not needed.** In a terminal there is no OS event
-  for "the IME just changed", so the state is sampled every `interval` ms (plus
-  immediately on mode change). What a sample costs depends on the backend: an
+- **Polling, and what it costs.** In a terminal there is no OS event for "the
+  IME just changed", so the plugin samples the state every `interval` ms, and
+  again on mode change. What a sample costs depends on the backend: an
   in-process FFI call on macOS and Windows, one round trip on an already-open
-  socket for fcitx5, and nothing at all for ibus, which pushes changes instead
-  of being asked. Only the external-tool fallback spawns a process per sample —
-  that is the case where raising `interval` or setting `insert_only = true`
-  earns its keep.
-- **Linux with no input method running?** The plugin degrades gracefully:
-  `get()` returns `default` and nothing errors. Both connections keep trying, so
-  starting fcitx5 or ibus later begins working without restarting Neovim — or
-  run `:IMEStatusReload` to re-detect right away. `:checkhealth ime-status`
-  reports where each daemon stands, and why, for this machine.
-- **Label stuck on `?` under fcitx5?** fcitx5 reports the input method of the
+  socket for fcitx5, and nothing at all for ibus, which pushes changes to the
+  plugin. Only the external-tool fallback spawns a process per sample. That is
+  the case where raising `interval` or setting `insert_only = true` earns its
+  keep.
+- **No input method running on Linux.** `get()` returns `default` and nothing
+  errors. Both connections keep trying, so starting fcitx5 or ibus later begins
+  working without restarting Neovim, and `:IMEStatusReload` re-detects right
+  away. `:checkhealth ime-status` reports where each daemon stands, and why, for
+  this machine.
+- **The label sits on `?` under fcitx5.** fcitx5 reports the input method of the
   *focused* client, so when nothing has focus it answers with an empty name and
   the label falls back to `unknown`. That is normal while Neovim is in the
-  background (`pause_on_focus_lost = true` avoids the work entirely). If it
-  never shows anything else, your terminal is probably not a fcitx5 client —
-  check `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` — or set `unknown = ""`
-  to hide it.
-- **Works in a terminal but not when Neovim is launched from a GUI?** Only a
-  concern if you pinned `tool`/`cmd` and opted out of the native backend. A
-  `.desktop` launcher, Neovide or a macOS `.app` does not read your shell rc, so
-  a tool that works in a terminal is missing from `PATH` there. Check
-  `:echo $PATH`, and either fix the launcher's environment or pin an absolute
-  path:
+  background, and `pause_on_focus_lost = true` avoids the work. If the label
+  shows nothing else, your terminal may not be a fcitx5 client: check
+  `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS`, or set `unknown = ""` to hide
+  it.
+- **Launched from a GUI rather than a terminal.** This applies only if you
+  pinned `tool`/`cmd` and opted out of the native backend. A `.desktop`
+  launcher, Neovide or a macOS `.app` does not read your shell rc, so a tool
+  that works in a terminal is missing from `PATH` there. Check `:echo $PATH`,
+  and either fix the launcher's environment or pin an absolute path:
 
   ```lua
   require("ime-status").setup({ tool = "/usr/bin/ibus" })
