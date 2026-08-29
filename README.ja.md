@@ -46,6 +46,57 @@ Neovim は OS の IME 状態を知りません。かな/英数の切り替えは
 }
 ```
 
+<details>
+<summary>他のプラグインマネージャ</summary>
+
+このプラグインに `plugin/` ディレクトリはなく、`setup()` を呼ぶまで何も起きません。
+lazy.nvim は `opts` が代わりに呼んでくれますが、それ以外では自分で呼ぶ必要が
+あります。
+
+### vim.pack（Neovim 0.12+ に標準搭載）
+
+```lua
+vim.pack.add({ "https://github.com/s4ng/ime-status.nvim" })
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+### mini.deps
+
+```lua
+MiniDeps.add("s4ng/ime-status.nvim")
+
+MiniDeps.later(function()
+  require("ime-status").setup({
+    auto_switch = true,
+    pause_on_focus_lost = true,
+  })
+end)
+```
+
+### vim-plug
+
+```lua
+vim.cmd([[
+  call plug#begin(stdpath('data') . '/plugged')
+  Plug 's4ng/ime-status.nvim'
+  call plug#end()
+]])
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+新しい設定では上の `require` が読み込むものはまだありません。`:PlugInstall` を実行
+して Neovim を一度起動し直せば、以降は問題ありません。
+
+</details>
+
 `opts` はそのまま `setup()` へ渡ります。ポーリングタイマーは `setup()` が開始する
 ので、一度は呼び出す必要があります。2 回目以降の呼び出しはオプションを再マージ
 するので、このプラグインを設定する 2 つのスペックが互いの設定を打ち消し合うことは
@@ -63,8 +114,8 @@ Neovim は OS の IME 状態を知りません。かな/英数の切り替えは
 `User IMEStatusChanged` autocmd を発火します。以下のイベント駆動な
 ステータスラインは、この autocmd に引っ掛けます。
 
-以下のスニペットは上のインストール指定が済んでいる前提で、コンポーネントだけを
-追加します。
+以下のスニペットはインストールと `setup()` が済んでいる前提で、コンポーネントだけ
+を追加します。
 
 ### lualine
 

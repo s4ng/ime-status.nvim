@@ -72,8 +72,11 @@ Call setup() once (this starts the polling timer): >lua
       pause_on_focus_lost = true,  -- no polling while unfocused
     })
 <
-With lazy.nvim, the same table as `opts = { ... }` does this for you. Both
-options above ship off; |ime-status-config| says what each one does.
+With lazy.nvim, the same table as `opts = { ... }` does this for you. Every
+other manager - vim.pack (Neovim 0.12+), mini.deps, vim-plug - leaves the
+call to you: the plugin ships no plugin/ directory, so nothing happens until
+setup() runs. The README has a snippet per manager. Both options above ship
+off; |ime-status-config| says what each one does.
 
 Calling setup() again re-merges: the timer and the autocmds are set up once,
 but a later call with options applies them, so two plugin specs that both

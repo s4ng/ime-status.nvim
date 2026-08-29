@@ -46,6 +46,57 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
+<details>
+<summary>Other plugin managers</summary>
+
+The plugin ships no `plugin/` directory, so nothing happens until `setup()` is
+called. lazy.nvim's `opts` makes that call for you; everywhere else it is yours
+to make.
+
+### vim.pack (built in, Neovim 0.12+)
+
+```lua
+vim.pack.add({ "https://github.com/s4ng/ime-status.nvim" })
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+### mini.deps
+
+```lua
+MiniDeps.add("s4ng/ime-status.nvim")
+
+MiniDeps.later(function()
+  require("ime-status").setup({
+    auto_switch = true,
+    pause_on_focus_lost = true,
+  })
+end)
+```
+
+### vim-plug
+
+```lua
+vim.cmd([[
+  call plug#begin(stdpath('data') . '/plugged')
+  Plug 's4ng/ime-status.nvim'
+  call plug#end()
+]])
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+On a fresh config the `require` above has nothing to load yet: run
+`:PlugInstall` and restart Neovim once, and it is fine from then on.
+
+</details>
+
 `opts` goes straight to `setup()`. Calling `setup()` starts the polling timer,
 so it has to run once. A second call re-merges its options, so two specs that
 both configure this plugin will not cancel each other out. Both options above
@@ -61,8 +112,8 @@ reads a cache, so calling it on every redraw costs nothing. When the label
 changes the plugin calls `redrawstatus` and fires a `User IMEStatusChanged`
 autocmd. The event-driven statuslines below hang off that autocmd.
 
-Each snippet below assumes the spec above is already installed, and adds only
-the component.
+Each snippet below assumes the plugin is installed and `setup()` has run, and
+adds only the component.
 
 ### lualine
 

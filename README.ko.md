@@ -45,6 +45,57 @@ Neovim은 OS의 IME 상태를 알지 못합니다. 한/영 전환은 운영체�
 }
 ```
 
+<details>
+<summary>다른 플러그인 관리자</summary>
+
+이 플러그인에는 `plugin/` 디렉터리가 없어서, `setup()`을 부르기 전까지는 아무 일도
+일어나지 않습니다. lazy.nvim은 `opts`가 대신 불러주지만, 그 외에는 직접 호출해야
+합니다.
+
+### vim.pack (Neovim 0.12+ 내장)
+
+```lua
+vim.pack.add({ "https://github.com/s4ng/ime-status.nvim" })
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+### mini.deps
+
+```lua
+MiniDeps.add("s4ng/ime-status.nvim")
+
+MiniDeps.later(function()
+  require("ime-status").setup({
+    auto_switch = true,
+    pause_on_focus_lost = true,
+  })
+end)
+```
+
+### vim-plug
+
+```lua
+vim.cmd([[
+  call plug#begin(stdpath('data') . '/plugged')
+  Plug 's4ng/ime-status.nvim'
+  call plug#end()
+]])
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+새 설정에서는 위 `require`가 아직 읽을 것이 없습니다. `:PlugInstall`을 실행하고
+Neovim을 한 번 다시 켜면 그 뒤로는 문제없습니다.
+
+</details>
+
 `opts`는 그대로 `setup()`으로 넘어갑니다. 폴링 타이머는 `setup()`이 시작하므로 한
 번은 호출해야 합니다. 두 번째 호출은 옵션을 다시 병합하므로, 이 플러그인을 함께
 설정하는 두 스펙이 서로의 설정을 지우는 일은 없습니다. 위 두 옵션의 기본값은
@@ -60,7 +111,7 @@ Neovim은 OS의 IME 상태를 알지 못합니다. 한/영 전환은 운영체�
 라벨이 바뀌면 플러그인이 직접 `redrawstatus`를 호출하고 `User IMEStatusChanged`
 autocmd를 발생시킵니다. 아래의 이벤트 기반 상태줄들은 이 autocmd에 붙습니다.
 
-아래 스니펫은 위 설치 스펙이 이미 있다고 가정하고, 컴포넌트만 추가합니다.
+아래 스니펫은 설치와 `setup()`이 끝난 것을 전제로, 컴포넌트만 추가합니다.
 
 ### lualine
 

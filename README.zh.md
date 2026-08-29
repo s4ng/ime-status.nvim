@@ -44,6 +44,56 @@ Neovim 不知道操作系统当前处于哪种 IME 状态。中英文切换由�
 }
 ```
 
+<details>
+<summary>其他插件管理器</summary>
+
+本插件没有 `plugin/` 目录，在 `setup()` 被调用之前什么都不会发生。lazy.nvim 的
+`opts` 会替你调用，其他方式则需要你自己调用。
+
+### vim.pack（Neovim 0.12+ 内置）
+
+```lua
+vim.pack.add({ "https://github.com/s4ng/ime-status.nvim" })
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+### mini.deps
+
+```lua
+MiniDeps.add("s4ng/ime-status.nvim")
+
+MiniDeps.later(function()
+  require("ime-status").setup({
+    auto_switch = true,
+    pause_on_focus_lost = true,
+  })
+end)
+```
+
+### vim-plug
+
+```lua
+vim.cmd([[
+  call plug#begin(stdpath('data') . '/plugged')
+  Plug 's4ng/ime-status.nvim'
+  call plug#end()
+]])
+
+require("ime-status").setup({
+  auto_switch = true,
+  pause_on_focus_lost = true,
+})
+```
+
+在全新配置里，上面的 `require` 还没有东西可加载：先运行 `:PlugInstall` 并重启一次
+Neovim，之后就正常了。
+
+</details>
+
 `opts` 会直接传给 `setup()`。轮询定时器由 `setup()` 启动，因此它需要被调用一次。
 第二次调用会重新合并选项，因此两份都配置本插件的 spec 不会互相覆盖。上面这两个选项
 默认都是*关闭*的；它们各自做什么，以及如何让重新输入时回到你上次用的输入法，
@@ -56,7 +106,7 @@ Neovim 不知道操作系统当前处于哪种 IME 状态。中英文切换由�
 插件会自己调用 `redrawstatus` 并触发 `User IMEStatusChanged` autocmd，下面那些事件
 驱动的状态栏就挂在这个 autocmd 上。
 
-下面的片段假设上面的安装配置已经存在，只负责添加组件。
+下面的片段假设插件已安装且 `setup()` 已调用，只负责添加组件。
 
 ### lualine
 
